@@ -11,7 +11,10 @@
 #
 ################################################################################
 
-CONFIGDIR = config
+THISDIR := $(realpath $(dir $(abspath $(word $(words $(MAKEFILE_LIST)),$(MAKEFILE_LIST)))))
+CONFIGDIR := $(abspath $(THISDIR)/config)
+SCRIPTS := $(THISDIR)/scripts
+DATA := $(THISDIR)/data
 
 MSG1 := The current config file, 
 MSG2 := , points to a non-existent location (
@@ -49,6 +52,31 @@ $(error $(MSG1)$(CONFIG)$(MSG2)$(LEXICONDISCOVERYDIR)$(MSG3))
 endif
 endif
 
+ifndef MAKECONFIG
+CONFIG := $(CONFIGDIR)/user-rasanen-directory.txt
+ifeq (,$(firstword $(wildcard $(CONFIG))))
+$(info $(CONFIGWARN))
+DUMMY := $(shell $(MAKE) $(CONFIG) MAKECONFIG=1)
+endif
+RASANENDIR := $(shell cat $(CONFIG))
+ifeq (, $(firstword $(wildcard $(RASANENDIR))))
+$(error $(MSG1)$(CONFIG)$(MSG2)$(RASANENDIR)$(MSG3))
+endif
+endif
+
+ifndef MAKECONFIG
+CONFIG := $(CONFIGDIR)/user-buckeye-directory.txt
+ifeq (,$(firstword $(wildcard $(CONFIG))))
+$(info $(CONFIGWARN))
+DUMMY := $(shell $(MAKE) $(CONFIG) MAKECONFIG=1)
+endif
+BUCKEYEDIR := $(shell cat $(CONFIG))
+ifeq (, $(firstword $(wildcard $(BUCKEYEDIR))))
+$(error $(MSG1)$(CONFIG)$(MSG2)$(BUCKEYEDIR)$(MSG3))
+endif
+endif
+
+
 
 %/user-kaldi-directory.txt: | %   
 	echo '../kaldi' > $@
@@ -56,14 +84,29 @@ endif
 %/user-lexicondiscovery-directory.txt: | %
 	echo '../lexicon_discovery' > $@
 
+%/user-rasanen-directory.txt: | %
+	echo '../rasanen' > $@
+
+%/user-buckeye-directory.txt: | %
+	echo '../buckeye_speech_corpus' > $@
+
 ################################################################################
 #
 # Recipes 
 #
 ################################################################################
 
-config:
-	mkdir config
+config data/zerospeech:
+	mkdir $@
+
+data/zerospeech/%/: | data/zerospeech
+	mkdir $@
+
+data/zerospeech/sample/get-wavs: $(SCRIPTS)/get_wavs_from_list.sh $(DATA)/sample_files.txt $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(dir $$@)
+	$(word 1, $^) $(word 2, $^) $(word 3, $^) $(dir $@)
+
+data/zerospeech/english/get-wavs: $(SCRIPTS)/get_wavs_from_list.sh $(DATA)/english_files.txt $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(dir $$@)
+	$(word 1, $^) $(word 2, $^) $(word 3, $^) $(dir $@)
 
 /%wav-rspecifier.scp: $$(wildcard /%*.wav)
 	rm -f $@
@@ -73,7 +116,7 @@ config:
 	rm -f $@
 	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(basename $(wav)).mfcc' >> $@;)
 
-/%mfccify: /%wav-rspecifier.scp /%feats-wspecifier.scp $(KALDIDIR)/src/featbin/compute-mfcc-feats $(KALDIDIR)/src/featbin/add-deltas user-kaldi-directory.txt
+/%mfccify: /%wav-rspecifier.scp /%feats-wspecifier.scp $(KALDIDIR)/src/featbin/compute-mfcc-feats $(KALDIDIR)/src/featbin/add-deltas $(CONFIGDIR)/user-kaldi-directory.txt
 	$(word 3, $^) scp:$(word 1, $^) scp:$(word 2, $^)
 	$(word 4, $^) scp:$(word 2, $^) scp,t:$(word 2, $^)
 
