@@ -6,6 +6,11 @@ __pycache__/
 # C extensions
 *.so
 
+# model files
+*.h5
+# junk I leave lying around
+*.tgz
+
 # Distribution / packaging
 .Python
 env/
