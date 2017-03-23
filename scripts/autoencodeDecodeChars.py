@@ -10,6 +10,8 @@ import cPickle as pickle
 import random
 import sys
 import os
+import re
+import copy
 from collections import defaultdict
 from echo_words import CharacterTable, pad
 from capacityStatistics import getPseudowords
@@ -344,6 +346,168 @@ def readText(path):
 
     return text, chars, charset
 
+def readMFCCs(path, filter_file=None):
+    basename = re.compile('.*/(.+)\.mfcc')
+    filelist = sorted([path+x for x in os.listdir(path) if x.endswith('.mfcc')])
+    idlist = [basename.match(x).group(1) for x in filelist]
+
+    if filter_file:
+        to_keep = {}
+        with open(args.splitfile, 'rb') as s:
+            for line in s:
+                if line.strip() != None:
+                    name, start, end = line.strip().split()
+                    if name in to_keep:
+                        to_keep[name].append((int(math.floor(float(start)*100)),int(math.ceil(float(end)*100))))
+                    else:
+                        to_keep[name] = [(int(math.floor(float(start)*100)),int(math.ceil(float(end)*100)))]
+
+    mfcc_lists = {}
+
+    for p in filelist:
+        mfcc_counter = 0
+        file_id = basename.match(p).group(1)
+        mfcc_lists[file_id] = []
+        with open(p, 'rb') as f:
+            for line in f:
+                if line.strip() != '[':
+                    if line.strip().startswith('['):
+                        line = line.strip()[1:]
+                    if line.strip().endswith(']'):
+                        line = line.strip()[:-1]
+                    else:
+                        mfcc = map(float, line.strip().split())
+                    mfcc_lists[file_id].append(mfcc)
+        mfcc_lists[file_id] = np.asarray(mfcc_lists[file_id])
+    return mfcc_lists
+
+def splitMFCCs(mfccs,intervals,segs):
+    # Filter out non-speech portions
+    mfcc_intervals = {}
+    for doc in segs:
+        mfcc_intervals[doc] = np.zeros((0,39))
+        for i in intervals[doc]:
+            sf, ef = int(np.rint(float(i[0]*100))), int(np.rint(float(i[1]*100)))
+            mfcc_intervals[doc] = np.append(mfcc_intervals[doc], mfccs[doc][sf:ef,:], 0)
+
+    # Split mfcc intervals according to segs
+    out = {}
+    for doc in mfcc_intervals:
+        out[doc] = np.split(mfcc_intervals[doc], np.asarray(range(mfcc_intervals[doc].shape[0]))[np.where(segs[doc])])[1:]
+    return out
+
+
+def timeSeg2frameSeg(timeseg_file):
+    intervals = {}
+    speech = {}
+    offsets = {}
+    seg = 0
+    with open(timeseg_file, 'rb') as f:
+        for line in f:
+            if line.strip() != '':
+                doc, start, end = line.strip().split()
+                if doc in intervals:
+                    if float(start) == intervals[doc][-1][1]:
+                        intervals[doc][-1] = (intervals[doc][-1][0],float(end))
+                    else:
+                        intervals[doc].append((float(start),float(end)))
+                else:
+                    intervals[doc] = [(float(start),float(end))]
+                s, e = int(np.rint(float(start)*100)), int(np.rint(float(end)*100))
+                if doc in speech:
+                    last = speech[doc][-1][1] + offsets.get(doc, 0)
+                else:
+                    last = 0
+                if last < s:
+                    seg = 1
+                    if doc in offsets:
+                        offsets[doc] += s - last
+                    else:
+                        offsets[doc] = s - last
+                else:
+                    seg = 0
+                offset = offsets.get(doc, 0)
+                if doc in speech:
+                    speech[doc].append((s-offset,e-offset,seg))
+                else:
+                    speech[doc] = [(s-offset,e-offset,seg)]
+
+    segs = {}
+    for doc in speech:
+        segs[doc] = np.zeros((speech[doc][-1][1]))
+        for seg in speech[doc]:
+            segs[doc][seg[0]] = 1.0
+
+    return intervals, segs 
+
+def frameSeg2timeSeg(intervals, seg_f):
+    for doc in intervals:
+        offset = last_interval = last_seg = 0
+        this_frame = 0
+        next_frame = 1
+        seg_t = []
+        for i in intervals[doc]:
+            # Interval boundaries in seconds (time)
+            st, et = i
+            # Interval boundaries in frames
+            sf, ef = int(np.rint(float(st)*100)), int(np.rint(float(et)*100))
+
+            offset += sf - last_interval
+            last_interval = ef
+            while this_frame + offset < ef:
+                if next_frame >= seg_f[doc].shape[0] or np.allclose(seg_f[doc][next_frame], 1):
+                    if last_seg+offset == sf:
+                        start = st
+                    else:
+                        start = float(last_seg+offset)/100
+                    if next_frame+offset == ef:
+                        end = et
+                    else:
+                        end = float(next_frame+offset)/100
+                    seg_t.append((start,end))
+                    last_seg = next_frame
+                this_frame += 1
+                next_frame += 1
+
+    return seg_t
+
+
+
+def reconstructFullMFCCs(speech_in, nonspeech_in):
+    speech = copy.deepcopy(speech_in)
+    nonspeech = copy.deepcopy(nonspeech_in)
+    out = []
+    offset = 0
+    last = 0
+    s = speech.pop(0)
+    ns = nonspeech.pop(0)
+    while ns[1] != None:
+        if last == ns[0]:
+            out.append((ns[0],ns[1],0))
+            offset += ns[1] - ns[0]
+            last = ns[1]
+            if len(nonspeech) > 0:
+                ns = nonspeech.pop(0)
+            else:
+                ns = (np.inf, None)
+        else:
+            out.append((s[0] + offset, s[1] + offset, s[2]))
+            last = out[-1][1]
+            if len(speech) > 0:
+                s = speech.pop(0)
+            else:
+                s = (np.inf, None)
+    if s[1] != None:
+        out.append((s[0]+offset, s[1]+offset, s[2]))
+    
+    for x in speech:
+        out.append((x[0]+offset, x[1]+offset, x[2]))
+
+    for x in out:
+        print('%s %s %s' %x)
+    return out
+            
+
 if __name__ == "__main__":
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.15)
     sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
@@ -351,22 +515,31 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("data")
-    parser.add_argument("pseudWeights")
+    #parser.add_argument("pseudWeights")
     parser.add_argument("--uttHidden", default=400)
     parser.add_argument("--wordHidden", default=40)
     parser.add_argument("--segHidden", default=100)
     parser.add_argument("--wordDropout", default=.5)
     parser.add_argument("--charDropout", default=.5)
     parser.add_argument("--logfile", default=None)
+    parser.add_argument("--acoustic", action='store_true')
+    parser.add_argument("--segfile", action=None)
     args = parser.parse_args()
 
     path = args.data
-    pseudWeights = args.pseudWeights
+    #pseudWeights = args.pseudWeights
 
     # path = sys.argv[1]
     # pseudWeights = sys.argv[2] #"pseud-echo-weights.h5"
 
-    text, uttChars, charset = readText(path)
+    if args.acoustic:
+        mfccs_full = readMFCCs(path)
+        intervals, segs_frames = timeSeg2frameSeg(args.segfile)
+        words_init_frames = splitMFCCs(mfccs_full, intervals, segs_frames)
+    else:
+        text, uttChars, charset = readText(path)
+
+    exit()
 
     print('corpus length:', len(text))
     chars = ["X"] + charset
@@ -404,7 +577,10 @@ if __name__ == "__main__":
 
     nUtts = len(text)
 
-    XC = uttsToCharVectors(uttChars, maxchar, ctable)
+    if args.acoustic:
+        pass 
+    else:
+        XC = uttsToCharVectors(uttChars, maxchar, ctable)
 
     wordEncoder = Sequential()
     wordEncoder.add(Dropout(charDropout, input_shape=(maxlen, len(chars)),

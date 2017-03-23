@@ -2,6 +2,15 @@
 .SECONDEXPANSION:
 .DELETE_ON_ERROR:
 
+THISDIR := $(realpath $(dir $(abspath $(word $(words $(MAKEFILE_LIST)),$(MAKEFILE_LIST)))))
+CONFIGDIR := $(abspath $(THISDIR)/config)
+SCRIPTS := $(THISDIR)/scripts
+DATA := $(THISDIR)/data
+BUILD := $(THISDIR)/build
+
+ZSPEECH-SAMPLE := $(foreach f, $(shell cat $(DATA)/sample_files.txt | paste -sd ' ' -), build/zerospeech/sample/$(f))
+ZSPEECH-ENGLISH := $(foreach f, $(shell cat $(DATA)/english_files.txt | paste -sd ' ' -), build/zerospeech/english/$(f))
+
 ################################################################################
 #
 #  User-specific parameter files (not shared; created by default with default values)
@@ -10,11 +19,6 @@
 #  This script just establishes 'official' default values for these parameters.
 #
 ################################################################################
-
-THISDIR := $(realpath $(dir $(abspath $(word $(words $(MAKEFILE_LIST)),$(MAKEFILE_LIST)))))
-CONFIGDIR := $(abspath $(THISDIR)/config)
-SCRIPTS := $(THISDIR)/scripts
-DATA := $(THISDIR)/data
 
 MSG1 := The current config file, 
 MSG2 := , points to a non-existent location (
@@ -53,18 +57,6 @@ endif
 endif
 
 ifndef MAKECONFIG
-CONFIG := $(CONFIGDIR)/user-rasanen-directory.txt
-ifeq (,$(firstword $(wildcard $(CONFIG))))
-$(info $(CONFIGWARN))
-DUMMY := $(shell $(MAKE) $(CONFIG) MAKECONFIG=1)
-endif
-RASANENDIR := $(shell cat $(CONFIG))
-ifeq (, $(firstword $(wildcard $(RASANENDIR))))
-$(error $(MSG1)$(CONFIG)$(MSG2)$(RASANENDIR)$(MSG3))
-endif
-endif
-
-ifndef MAKECONFIG
 CONFIG := $(CONFIGDIR)/user-buckeye-directory.txt
 ifeq (,$(firstword $(wildcard $(CONFIG))))
 $(info $(CONFIGWARN))
@@ -84,9 +76,6 @@ endif
 %/user-lexicondiscovery-directory.txt: | %
 	echo '../lexicon_discovery' > $@
 
-%/user-rasanen-directory.txt: | %
-	echo '../rasanen' > $@
-
 %/user-buckeye-directory.txt: | %
 	echo '../buckeye_speech_corpus' > $@
 
@@ -96,28 +85,45 @@ endif
 #
 ################################################################################
 
-config data/zerospeech:
+zerospeech-data: build/zerospeech/sample/mfccs build/zerospeech/english/mfccs
+
+clean:
+	rm -rf build
+
+config build:
 	mkdir $@
 
-data/zerospeech/%/: | data/zerospeech
-	mkdir $@
+build/zerospeech/%/:
+	mkdir -p $@
 
-data/zerospeech/sample/get-wavs: $(SCRIPTS)/get_wavs_from_list.sh $(DATA)/sample_files.txt $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(dir $$@)
-	$(word 1, $^) $(word 2, $^) $(word 3, $^) $(dir $@)
+build/zerospeech/%/rasanen_seg.txt: scripts/rasanen2seginit.py data/rasanen_seg_%_src.txt
+	cat $(word 2, $^) | python $(word 1, $^) > $@
 
-data/zerospeech/english/get-wavs: $(SCRIPTS)/get_wavs_from_list.sh $(DATA)/english_files.txt $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(dir $$@)
-	$(word 1, $^) $(word 2, $^) $(word 3, $^) $(dir $@)
+.PRECIOUS: $(ZSPEECH-SAMPLE)
+$(ZSPEECH-SAMPLE): $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(dir $$@)
+	find $(word 1, $^) -name "$(notdir $@)" -type f -exec cp '{}' build/zerospeech/sample/ \;
 
-/%wav-rspecifier.scp: $$(wildcard /%*.wav)
+.PRECIOUS: $(ZSPEECH-ENGLISH)
+$(ZSPEECH-ENGLISH): $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(dir $$@)
+	find $(word 1, $^) -name "$(notdir $@)" -type f -exec cp '{}' build/zerospeech/english/ \;
+
+build/zerospeech/sample/wav-rspecifier.scp: $(ZSPEECH-SAMPLE)
 	rm -f $@
-	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(wav)' >> $@;)
-
-/%feats-wspecifier.scp: $$(wildcard /%*.wav)
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(wav))' >> $@;)
+	
+build/zerospeech/sample/feats-wspecifier.scp: $(ZSPEECH-SAMPLE)
 	rm -f $@
-	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(basename $(wav)).mfcc' >> $@;)
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(basename $(wav)).mfcc)' >> $@;)
+	
+build/zerospeech/english/wav-rspecifier.scp: $(ZSPEECH-ENGLISH)
+	rm -f $@
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(wav))' >> $@;)
+	
+build/zerospeech/english/feats-wspecifier.scp: $(ZSPEECH-ENGLISH)
+	rm -f $@
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(basename $(wav)).mfcc)' >> $@;)
+	
+%mfccs: %wav-rspecifier.scp %feats-wspecifier.scp $(KALDIDIR)/src/featbin/compute-mfcc-feats $(KALDIDIR)/src/featbin/add-deltas $(CONFIGDIR)/user-kaldi-directory.txt
+	$(word 3, $^) scp:$(abspath $(word 1, $^)) scp:$(abspath $(word 2, $^))
+	$(word 4, $^) scp:$(abspath $(word 2, $^)) scp,t:$(abspath $(word 2, $^))
 
-/%mfccify: /%wav-rspecifier.scp /%feats-wspecifier.scp $(KALDIDIR)/src/featbin/compute-mfcc-feats $(KALDIDIR)/src/featbin/add-deltas $(CONFIGDIR)/user-kaldi-directory.txt
-	$(word 3, $^) scp:$(word 1, $^) scp:$(word 2, $^)
-	$(word 4, $^) scp:$(word 2, $^) scp,t:$(word 2, $^)
-
-%mfccify: $$(abspath $$@);
