@@ -13,6 +13,7 @@ import random
 import sys
 import re
 import copy
+import time
 from collections import defaultdict
 from echo_words import CharacterTable, pad
 from capacityStatistics import getPseudowords
@@ -173,6 +174,8 @@ def lossByUtt(model, Xb, yb, BATCH_SIZE, metric="logprob"):
         pRight = logP * yb
         #sum out word, char, len(chars)
         return pRight.sum(axis=(1, 2, 3))
+    elif metric == 'msq':
+        return np.mean((preds - yb)**2, axis=(1,2,3))
     else:
         right = (np.argmax(preds, axis=-1) == np.argmax(yb, axis=-1))
         rightPerUtt = right.sum(axis=(1,2))
@@ -196,8 +199,8 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
         #approximately the probability of the sample given the data
         pSeg = eScores / eScores.sum(axis=0, keepdims=True)
     elif metric == 'msq':
-        MM = np.max(scores, axis=0, keepdims=True)
-        eScores = np.exp(scores - MM)
+        MM = np.max(-scores, axis=0, keepdims=True)
+        eScores = np.exp(-scores - MM)
         #approximately the probability of the sample given the data
         pSeg = eScores / eScores.sum(axis=0, keepdims=True)
     else:
@@ -347,27 +350,30 @@ def printSegScore(text, allBestSeg, intervals=None, acoustic=False, out_file=Non
     bm_tot = ba_tot = bP_tot = swm_tot = swa_tot = swP_tot = 0
     print('Per-document scores:', file=out_file)
     for doc in sorted(allBestSeg.keys()):
-        if acoustic:
-            assert intervals, 'Intervals object required for scoring in acoustic mode.'
-            segmented = frameSeg2timeSeg(intervals[doc],allBestSeg[doc])
-            (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = scoreFrameSegs(text[doc], segmented)
-            bm_tot, ba_tot, bP_tot = bm_tot+bm, ba_tot+ba, bP_tot+bP
-            swm_tot, swa_tot, swP_tot = swm_tot+swm, swa_tot+swa, swP_tot+swP
-            print('Score for document "%s":' %doc, file=out_file)
-            print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
-            print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
-        else:
-            segmented = matToSegs(allBestSeg[doc], text)
-            #print(segmented)
-            #print(text)
+        if doc in text:
+            if acoustic:
+                assert intervals, 'Intervals object required for scoring in acoustic mode.'
+                segmented = frameSeg2timeSeg(intervals[doc],allBestSeg[doc])
+                (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = scoreFrameSegs(text[doc], segmented)
+                bm_tot, ba_tot, bP_tot = bm_tot+bm, ba_tot+ba, bP_tot+bP
+                swm_tot, swa_tot, swP_tot = swm_tot+swm, swa_tot+swa, swP_tot+swP
+                print('Score for document "%s":' %doc, file=out_file)
+                print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
+                print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
+            else:
+                segmented = matToSegs(allBestSeg[doc], text)
+                #print(segmented)
+                #print(text)
 
-            (bp,br,bf) = scoreBreaks(text, segmented)
-            (swp,swr,swf) = scoreWords(text, segmented)
-            print('Score for document "%s":' %doc, file=out_file)
-            print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
-            print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
-            (lp,lr,lf) = scoreLexicon(text, segmented)
-            print("LP %4.2f LR %4.2f LF %4.2f" % (100 * lp, 100 * lr, 100 * lf), file=out_file)
+                (bp,br,bf) = scoreBreaks(text, segmented)
+                (swp,swr,swf) = scoreWords(text, segmented)
+                print('Score for document "%s":' %doc, file=out_file)
+                print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
+                print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
+                (lp,lr,lf) = scoreLexicon(text, segmented)
+                print("LP %4.2f LR %4.2f LF %4.2f" % (100 * lp, 100 * lr, 100 * lf), file=out_file)
+        else:
+            print('Warning: Document ID "%s" in training data but not in gold. Skipping evaluation for this file.')
     if acoustic:
         bp,br,bf = precision_recall_f(bm_tot,ba_tot,bP_tot)
         swp,swr,swf = precision_recall_f(swm_tot,swa_tot,swP_tot)
@@ -658,6 +664,7 @@ if __name__ == "__main__":
     parser.add_argument("--logfile", default=None)
     parser.add_argument("--acoustic", action='store_true')
     parser.add_argument("--segfile", default=None)
+    parser.add_argument("--segout", default=None)
     parser.add_argument("--goldfile", default=None)
     parser.add_argument("--gpufrac", default=0.15)
     args = parser.parse_args()
@@ -665,6 +672,9 @@ if __name__ == "__main__":
         args.gpufrac = float(args.gpufrac)
     except:
         args.gpufrac = 0.15
+
+    if args.segout:
+        os.makedirs(args.segout)
 
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpufrac)
     sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
@@ -679,6 +689,11 @@ if __name__ == "__main__":
     # path = sys.argv[1]
     # pseudWeights = sys.argv[2] #"pseud-echo-weights.h5"
 
+    t0 = time.time()
+    print()
+    print('Loading data...')
+    print()
+
     if args.acoustic:
         # intervals, segs_init, and mfccs are dictionaries
         # indexed by document ID
@@ -690,9 +705,13 @@ if __name__ == "__main__":
         maxlen = 100  # at most 1 second per word 
         maxutt = 10   # at most 2 words per second (utterance average)
         maxchar = 400 # at most 4 seconds of speech per utterance
-        print('Initial segmentation score:')
-        printSegScore(text,segs_init,intervals,True)
+        t1 = time.time()
+        print('Data loaded in %ds.' %(t1-t0))
         print()
+
+#        print('Initial segmentation scores:')
+#        printSegScore(text,segs_init,intervals,True)
+#        print()
     else:
         text, uttChars, charset = readText(path)
         print('corpus length:', len(text))
@@ -705,7 +724,7 @@ if __name__ == "__main__":
         maxlen = 7
         maxutt = 10
         maxchar = 30
-
+    
     if args.logfile == None:
         logdir = "logs/" + str(os.getpid())
     else:
@@ -730,7 +749,10 @@ if __name__ == "__main__":
     N_SAMPLES = 50
     DEL_WT = 50
     ONE_LETTER_WT = 10
-    METRIC = "logprob"
+    if args.acoustic:
+        METRIC = 'msq'
+    else:
+        METRIC = "logprob"
     charDim = 39 if args.acoustic else len(chars)
 
     wordEncoder = Sequential()
@@ -748,7 +770,10 @@ if __name__ == "__main__":
                             name="decoder%i" % ii))
 
     wordDecoder.add(TimeDistributed(Dense(charDim, name="dense"), name="td"))
-    wordDecoder.add(Activation('softmax', name="softmax"))
+    if args.acoustic:
+        wordDecoder.add(Activation('linear', name='linear'))
+    else:
+        wordDecoder.add(Activation('softmax', name="softmax"))
 
     #wordEncoder.load_weights(pseudWeights, by_name=True)
     #wordDecoder.load_weights(pseudWeights, by_name=True)
@@ -810,6 +835,7 @@ if __name__ == "__main__":
                       optimizer="adam")
     segmenter.summary()
 
+    print()
     print("Pre-training autoencoder...")
 
     if args.acoustic:
@@ -822,13 +848,14 @@ if __name__ == "__main__":
     deletedChars = dict.fromkeys(doc_list)
 
     ## pretrain
-    for iteration in range(1):
+    for iteration in range(10):
         print()
         print('-' * 50)
         print('Iteration', iteration)
 
         for doc in doc_list:
             if args.acoustic:
+                print(doc)
                 pSegs = segs2pSegsWithForced(segs_init[doc], forced[doc], alpha = 0.05)
                 segs = sampleFrameSegs(pSegs)
                 X_train[doc],deletedChars[doc] = splitMFCCs(mfccs[doc], segs, maxutt, maxlen, maxchar)
@@ -880,6 +907,7 @@ if __name__ == "__main__":
 
     print('Co-training autoencoder and segmenter...')
     for iteration in range(81):
+        t0 = time.time()
         print()
         print('-' * 50)
         print('Iteration', iteration)
@@ -899,9 +927,10 @@ if __name__ == "__main__":
                     pSegs = segs2pSegsWithForced(segs_init[doc], forced[doc], alpha = 0.05)
                 else:
                     nSamples = N_SAMPLES
-                    pSegs = segmenter.predict(XC[doc], verbose=0)
-                    pSegs = np.squeeze(pSegs,-1)
+                    pSegs = segmenter.predict(XC[doc][None,...], verbose=0)
+                    pSegs = np.squeeze(pSegs)
                     pSegs = .9 * pSegs + .1 * .5 * np.ones(pSegs.shape)
+                    pSegs[forced[doc]] = 1.
                 scores = []
                 segSamples = []
                 dels = []
@@ -926,7 +955,7 @@ if __name__ == "__main__":
                 else:
                     y = X
 
-                allBestSegs[doc] = bestSegs
+                allBestSegs[doc] = np.squeeze(bestSegs)
 
                 loss = model.train_on_batch(X, y)
                 segmenter.train_on_batch(XC[doc][None,...], np.expand_dims(segProbs, 2))
@@ -995,6 +1024,9 @@ if __name__ == "__main__":
                     allBestSegs[doc][inds] = bestSegs
 
                     loss = model.train_on_batch(Xb, yb)
+                    print(XCb.shape)
+                    print(np.expand_dims(segProbs,2).shape)
+                    print()
                     segmenter.train_on_batch(XCb, np.expand_dims(segProbs, 2))
                     epochLoss += loss[0]
                     epochDel += deleted.sum()
@@ -1062,16 +1094,22 @@ if __name__ == "__main__":
                                     print("Score", scores[doc][smp][utt], "del", deleted[utt])
                         print()
 
+        t1 = time.time()
+        print("Iteration total time: %ds" %(t1-t0))
         print("Loss:", epochLoss)
         print("Deletions:", epochDel)
         print("One letter words:", epochOneL)
-        printSegScore(text, allBestSegs, intervals, acoustic=True)
+        if args.acoustic:
+            printSegScore(text, allBestSegs, intervals, acoustic=True)
+        else:
+            printSegScore(text, allBestSegs, acoustic=True)
         writeLog(iteration, epochLoss, epochDel, 
                  text, allBestSegs, logfile, intervals, args.acoustic)
 
         if iteration % 10 == 0:
             if args.acoustic:
-                printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs)) 
+                if args.segout:
+                    printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), file=args.segout) 
             else:
                 writeSolutions(logdir, model, segmenter,
                                allBestSegs, text, iteration)
