@@ -1,5 +1,7 @@
 from __future__ import print_function, division
 import argparse
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 from keras.models import Model, Sequential, load_model
 from keras.engine.training import slice_X
 from keras.layers import Activation, TimeDistributed, Dense, RepeatVector, recurrent, Input, Reshape, Merge, merge, Lambda, Dropout
@@ -9,7 +11,6 @@ import numpy as np
 import cPickle as pickle
 import random
 import sys
-import os
 import re
 import copy
 from collections import defaultdict
@@ -26,6 +27,13 @@ def uttsToCharVectors(text, maxchar, ctable):
 
     return X
 
+def uttsToFrameVectors(mfccs):
+    uttlen = mfccs.shape[-2]
+    maxlen = mfccs.shape[-1]
+    new_shape = mfccs.shape[:-2]
+    new_shape.append(uttlen*maxlen)
+    return mfccs.reshape(new_shape)
+
 def uttsToWordVectors(text, maxutts, maxlen, chars):
     nUtts = len(text)
     X = np.zeros((nUtts, maxutt, maxlen, ctable.dim()), dtype=np.bool)
@@ -40,6 +48,27 @@ def uttsToWordVectors(text, maxutts, maxlen, chars):
             X[ui, corr + ii, :] = ctable.encode(pad(word, maxlen, "X"), maxlen)
 
     return X
+
+def padFrameUtt(utt, maxutt, maxlen):
+    deleted = sum([len(x) for x in utt[maxutt:]])
+    utt = utt[:maxutt]
+    nWds = len(utt)
+    for i,word in enumerate(utt):
+        utt[i], deleted_wrd = padFrameWord(word,maxlen)
+        deleted += deleted_wrd
+    corr = max(0, maxutt - nWds)
+    for i in xrange(corr):
+        utt.append(np.zeros((maxlen,39)))
+    utt = np.stack(utt, axis=0)
+    assert utt.shape == (maxutt, maxlen, 39), 'Utterance shape after padding should be %s, was actually %s.' %((maxutt, maxlen, 39), utt.shape)
+    return utt, deleted
+
+def padFrameWord(word, maxlen):
+    deleted = len(word[maxlen:])
+    word = word[:maxlen,:]
+    word = np.append(word, np.zeros((max(0, maxlen-word.shape[0]),39)),0)
+    assert word.shape == (maxlen,39), 'Word shape after padding should be %s, was actually %s.' %((maxlen,93), word.shape)
+    return word, deleted
 
 def inputSliceClosure(dim):
     return lambda xx: xx[:, dim, :, :]
@@ -58,13 +87,13 @@ def batchIndices(Xt, batchSize):
             zip(range(0, xN, batchSize),
                 range(batchSize, xN, batchSize)) + lastBit]
 
-def segsToX(textChars, segs, maxutt, maxlen, ctable):
-    nUtts = len(textChars)
+def charSegs2X(chars, segs, maxutt, maxlen, ctable):
+    nUtts = len(chars)
     X = np.zeros((nUtts, maxutt, maxlen, ctable.dim()), dtype=np.bool)
     deletedChars = np.zeros((nUtts,))
     oneWord = np.zeros((nUtts,))
 
-    for ui,uttChars in enumerate(textChars):
+    for ui,uttChars in enumerate(chars):
         uttWds = np.where(segs[ui])[0]
         #print("uttwds", uttWds)
         corr = max(0, maxutt - len(uttWds))
@@ -95,7 +124,31 @@ def segsToX(textChars, segs, maxutt, maxlen, ctable):
 
     return X, deletedChars, oneWord
 
-def sampleSegs(utts, pSegs):
+def intervals2forcedSeg(intervals):
+    out = dict.fromkeys(intervals)
+    for doc in intervals:
+        out[doc] = []
+        offset = 0
+        last = 0
+        for i in intervals[doc]:
+            s, e = i
+            s, e = int(np.rint(s*100)), int(np.rint(e*100))
+            offset += s-last
+            out[doc].append(s-offset)
+            last = e
+    return out
+
+def segs2pSegs(segs, alpha=0.05):
+    assert alpha >= 0.0 and alpha <= 0.5, 'Illegal value of alpha (0 <= alpha <= 0.5)'
+    return np.maximum(alpha, segs - alpha)
+
+def segs2pSegsWithForced(segs, forced, alpha=0.05):
+    assert alpha >= 0.0 and alpha <= 0.5, 'Illegal value of alpha (0 <= alpha <= 0.5)'
+    out = segs2pSegs(segs, alpha)
+    out[forced] = 1.
+    return out
+
+def sampleCharSegs(utts, pSegs):
     smp = np.random.uniform(size=pSegs.shape)
     maxchar = pSegs.shape[1]
     indics = smp < pSegs
@@ -107,6 +160,10 @@ def sampleSegs(utts, pSegs):
             indics[ui, maxchar - 1] = 1
 
     return indics
+
+def sampleFrameSegs(pSegs, intervals=None):
+    smp = np.random.uniform(size=pSegs.shape)
+    return smp < pSegs
 
 def lossByUtt(model, Xb, yb, BATCH_SIZE, metric="logprob"):
     preds = model.predict(Xb, batch_size=BATCH_SIZE, verbose=0)
@@ -134,6 +191,11 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
     scores = np.array(scores)
 
     if metric == "logprob":
+        MM = np.max(scores, axis=0, keepdims=True)
+        eScores = np.exp(scores - MM)
+        #approximately the probability of the sample given the data
+        pSeg = eScores / eScores.sum(axis=0, keepdims=True)
+    elif metric == 'msq':
         MM = np.max(scores, axis=0, keepdims=True)
         eScores = np.exp(scores - MM)
         #approximately the probability of the sample given the data
@@ -279,29 +341,55 @@ def writeSolutions(logdir, model, segmenter, allBestSeg, text, iteration):
                   file=logfile)
     logfile.close()
 
-def printSegScore(text, allBestSeg):
-    segmented = matToSegs(allBestSeg, text)
+def printSegScore(text, allBestSeg, intervals=None, acoustic=False, out_file=None):
+    if not out_file:
+        out_file = sys.stdout
+    bm_tot = ba_tot = bP_tot = swm_tot = swa_tot = swP_tot = 0
+    print('Per-document scores:', file=out_file)
+    for doc in sorted(allBestSeg.keys()):
+        if acoustic:
+            assert intervals, 'Intervals object required for scoring in acoustic mode.'
+            segmented = frameSeg2timeSeg(intervals[doc],allBestSeg[doc])
+            (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = scoreFrameSegs(text[doc], segmented)
+            bm_tot, ba_tot, bP_tot = bm_tot+bm, ba_tot+ba, bP_tot+bP
+            swm_tot, swa_tot, swP_tot = swm_tot+swm, swa_tot+swa, swP_tot+swP
+            print('Score for document "%s":' %doc, file=out_file)
+            print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
+            print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
+        else:
+            segmented = matToSegs(allBestSeg[doc], text)
+            #print(segmented)
+            #print(text)
 
-    #print(segmented)
-    #print(text)
+            (bp,br,bf) = scoreBreaks(text, segmented)
+            (swp,swr,swf) = scoreWords(text, segmented)
+            print('Score for document "%s":' %doc, file=out_file)
+            print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
+            print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
+            (lp,lr,lf) = scoreLexicon(text, segmented)
+            print("LP %4.2f LR %4.2f LF %4.2f" % (100 * lp, 100 * lr, 100 * lf), file=out_file)
+    if acoustic:
+        bp,br,bf = precision_recall_f(bm_tot,ba_tot,bP_tot)
+        swp,swr,swf = precision_recall_f(swm_tot,swa_tot,swP_tot)
+        print('Overall scores:', file=out_file)
+        print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
+        print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
 
-    (bp,br,bf) = scoreBreaks(text, segmented)
-    (swp,swr,swf) = scoreWords(text, segmented)
-    (lp,lr,lf) = scoreLexicon(text, segmented)
-    print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf))
-    print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf))
-    print("LP %4.2f LR %4.2f LF %4.2f" % (100 * lp, 100 * lr, 100 * lf))
+def writeLog(iteration, epochLoss, epochDel, text, allBestSeg, logfile, intervals=None, acoustic=False):
+    if acoustic:
+        print('Training loss:', file=logfile)
+        print("\t".join(["%g" % xx for xx in [
+                        iteration, epochLoss, epochDel]]), file=logfile)
+        printSegScore(text,allBestSeg,intervals,acoustic=True,out_file=logfile)
+    else:
+        segmented = matToSegs(allBestSeg, text)
+        (bp,br,bf) = scoreBreaks(text, segmented)
+        (swp,swr,swf) = scoreWords(text, segmented)
+        (lp,lr,lf) = scoreLexicon(text, segmented)
 
-def writeLog(iteration, epochLoss, epochDel, text, allBestSeg, logfile):
-    segmented = matToSegs(allBestSeg, text)
-
-    (bp,br,bf) = scoreBreaks(text, segmented)
-    (swp,swr,swf) = scoreWords(text, segmented)
-    (lp,lr,lf) = scoreLexicon(text, segmented)
-
-    print("\t".join(["%g" % xx for xx in [
-                    iteration, epochLoss, epochDel, bp, br, bf, swp, swr, swf,
-                    lp, lr, lf]]), file=logfile)
+        print("\t".join(["%g" % xx for xx in [
+                        iteration, epochLoss, epochDel, bp, br, bf, swp, swr, swf,
+                        lp, lr, lf]]), file=logfile)
 
 def realize(rText, maxlen, maxutt):
     items = (["X" * maxlen for ii in range(maxutt - len(rText))] + 
@@ -346,6 +434,18 @@ def readText(path):
 
     return text, chars, charset
 
+def readGoldFrameSeg(path):
+    gold_seg = {}
+    with open(path, 'rb') as gold:
+        for line in gold:
+            if line.strip() != '':
+                doc, start, end = line.strip().split()[:3]
+                if doc in gold_seg:
+                    gold_seg[doc].append((float(start),float(end)))
+                else:
+                    gold_seg[doc] = [(float(start),float(end))]
+    return gold_seg
+
 def readMFCCs(path, filter_file=None):
     basename = re.compile('.*/(.+)\.mfcc')
     filelist = sorted([path+x for x in os.listdir(path) if x.endswith('.mfcc')])
@@ -381,7 +481,7 @@ def readMFCCs(path, filter_file=None):
         mfcc_lists[file_id] = np.asarray(mfcc_lists[file_id])
     return mfcc_lists
 
-def splitMFCCs(mfccs,intervals,segs):
+def filterMFCCs(mfccs, intervals, segs):
     # Filter out non-speech portions
     mfcc_intervals = {}
     for doc in segs:
@@ -389,13 +489,37 @@ def splitMFCCs(mfccs,intervals,segs):
         for i in intervals[doc]:
             sf, ef = int(np.rint(float(i[0]*100))), int(np.rint(float(i[1]*100)))
             mfcc_intervals[doc] = np.append(mfcc_intervals[doc], mfccs[doc][sf:ef,:], 0)
+    return mfcc_intervals
 
+
+def splitMFCCs(mfcc_intervals,segs,maxutt,maxlen,maxchar,word_segs=True):
     # Split mfcc intervals according to segs
     out = {}
-    for doc in mfcc_intervals:
-        out[doc] = np.split(mfcc_intervals[doc], np.asarray(range(mfcc_intervals[doc].shape[0]))[np.where(segs[doc])])[1:]
-    return out
+    deletedChars = []
+    words = np.split(mfcc_intervals, np.where(segs)[0])[1:]
+    utts = []
+    utt = []
+    utt_len_chars = 0
+    while len(words) > 0:
+        w = words.pop(0)
+        while utt_len_chars <= maxchar and len(utt) < maxutt and len(words) > 0:
+            utt_len_chars += w.shape[0]
+            w = words.pop(0)
+        if word_segs:
+            utt, deleted_utt = padFrameUtt(utt, maxutt, maxlen)
+        else:
+            utt, deleted_utt = padFrameWord(np.concatenate(utt,axis=0),maxchar)
+        utts.append(utt)
+        deletedChars.append(deleted_utt)
+        utt = [w]
+        utt_len_chars = w.shape[0]
+    utts = np.stack(utts,axis=0)
+    deletedChars = np.asarray(deletedChars)
+    return utts, deletedChars
 
+def concatDocs(docs):
+    doc_list = [docs[x] for x in sorted(docs.keys())]
+    return np.concatenate(doc_list, axis=0)
 
 def timeSeg2frameSeg(timeseg_file):
     intervals = {}
@@ -405,7 +529,7 @@ def timeSeg2frameSeg(timeseg_file):
     with open(timeseg_file, 'rb') as f:
         for line in f:
             if line.strip() != '':
-                doc, start, end = line.strip().split()
+                doc, start, end = line.strip().split()[:3]
                 if doc in intervals:
                     if float(start) == intervals[doc][-1][1]:
                         intervals[doc][-1] = (intervals[doc][-1][0],float(end))
@@ -440,38 +564,52 @@ def timeSeg2frameSeg(timeseg_file):
 
     return intervals, segs 
 
-def frameSeg2timeSeg(intervals, seg_f):
+def frameSegs2timeSegs(intervals, seg_f):
+    out = dict.fromkeys(intervals)
     for doc in intervals:
-        offset = last_interval = last_seg = 0
-        this_frame = 0
-        next_frame = 1
-        seg_t = []
-        for i in intervals[doc]:
-            # Interval boundaries in seconds (time)
-            st, et = i
-            # Interval boundaries in frames
-            sf, ef = int(np.rint(float(st)*100)), int(np.rint(float(et)*100))
+        out[doc] = frameSeg2timeSeg(intervals[doc],seg_f[doc])
+    return out
 
-            offset += sf - last_interval
-            last_interval = ef
-            while this_frame + offset < ef:
-                if next_frame >= seg_f[doc].shape[0] or np.allclose(seg_f[doc][next_frame], 1):
-                    if last_seg+offset == sf:
-                        start = st
-                    else:
-                        start = float(last_seg+offset)/100
-                    if next_frame+offset == ef:
-                        end = et
-                    else:
-                        end = float(next_frame+offset)/100
-                    seg_t.append((start,end))
-                    last_seg = next_frame
-                this_frame += 1
-                next_frame += 1
+def frameSeg2timeSeg(intervals, seg_f):
+    offset = last_interval = last_seg = 0
+    this_frame = 0
+    next_frame = 1
+    seg_t = []
+    for i in intervals:
+        # Interval boundaries in seconds (time)
+        st, et = i
+        # Interval boundaries in frames
+        sf, ef = int(np.rint(float(st)*100)), int(np.rint(float(et)*100))
+
+        offset += sf - last_interval
+        last_interval = ef
+        while this_frame + offset < ef:
+            if next_frame >= seg_f.shape[0] or np.allclose(seg_f[next_frame], 1):
+                if last_seg+offset == sf:
+                    start = st
+                else:
+                    start = float(last_seg+offset)/100
+                if next_frame+offset == ef:
+                    end = et
+                else:
+                    end = float(next_frame+offset)/100
+                seg_t.append((start,end))
+                last_seg = next_frame
+            this_frame += 1
+            next_frame += 1
 
     return seg_t
 
+def printTimeSeg(seg, docname=None):
+    for i in seg:
+        if docname:
+            print('%s %s %s' %(docname, i[0], i[1]))
+        else:
+            print('%s %s' %i)
 
+def printTimeSegs(segs):
+    for doc in segs:
+        printTimeSeg(segs[doc], doc)
 
 def reconstructFullMFCCs(speech_in, nonspeech_in):
     speech = copy.deepcopy(speech_in)
@@ -509,10 +647,6 @@ def reconstructFullMFCCs(speech_in, nonspeech_in):
             
 
 if __name__ == "__main__":
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.15)
-    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
-    K.set_session(sess)
-
     parser = argparse.ArgumentParser()
     parser.add_argument("data")
     #parser.add_argument("pseudWeights")
@@ -523,8 +657,21 @@ if __name__ == "__main__":
     parser.add_argument("--charDropout", default=.5)
     parser.add_argument("--logfile", default=None)
     parser.add_argument("--acoustic", action='store_true')
-    parser.add_argument("--segfile", action=None)
+    parser.add_argument("--segfile", default=None)
+    parser.add_argument("--goldfile", default=None)
+    parser.add_argument("--gpufrac", default=0.15)
     args = parser.parse_args()
+    try:
+        args.gpufrac = float(args.gpufrac)
+    except:
+        args.gpufrac = 0.15
+
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpufrac)
+    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+    K.set_session(sess)
+
+    if args.acoustic:
+        assert args.segfile and args.goldfile, 'Files containing initial and gold segmentations are required in acoustic mode.'
 
     path = args.data
     #pseudWeights = args.pseudWeights
@@ -533,24 +680,37 @@ if __name__ == "__main__":
     # pseudWeights = sys.argv[2] #"pseud-echo-weights.h5"
 
     if args.acoustic:
-        mfccs_full = readMFCCs(path)
-        intervals, segs_frames = timeSeg2frameSeg(args.segfile)
-        words_init_frames = splitMFCCs(mfccs_full, intervals, segs_frames)
+        # intervals, segs_init, and mfccs are dictionaries
+        # indexed by document ID
+        intervals, segs_init = timeSeg2frameSeg(args.segfile)
+        forced = intervals2forcedSeg(intervals)
+        text = readGoldFrameSeg(args.goldfile)
+        mfccs = filterMFCCs(readMFCCs(path), intervals, segs_init)
+        doc_list = sorted(list(mfccs.keys()))
+        maxlen = 100  # at most 1 second per word 
+        maxutt = 10   # at most 2 words per second (utterance average)
+        maxchar = 400 # at most 4 seconds of speech per utterance
+        print('Initial segmentation score:')
+        printSegScore(text,segs_init,intervals,True)
+        print()
     else:
         text, uttChars, charset = readText(path)
-
-    exit()
-
-    print('corpus length:', len(text))
-    chars = ["X"] + charset
-    print('total chars:', len(chars))
-    ctable = CharacterTable(chars)
+        print('corpus length:', len(text))
+        chars = ["X"] + charset
+        print('total chars:', len(chars))
+        ctable = CharacterTable(chars)
+        ## TODO: Change symbolic mode to allow multiple input files
+        ## like acoustic mode currently does
+        doc_list = ['main']
+        maxlen = 7
+        maxutt = 10
+        maxchar = 30
 
     if args.logfile == None:
         logdir = "logs/" + str(os.getpid())
     else:
         logdir = "logs/" + args.logfile
-    os.mkdir(logdir)
+    os.makedirs(logdir)
     print("Logging at", logdir)
     logfile = file(logdir + "/log.txt", "w")
     print("\t".join([
@@ -558,9 +718,6 @@ if __name__ == "__main__":
                     "bp", "br", "bf", "swp", "swr", "swf",
                     "lp", "lr", "lf"]), file=logfile)
 
-    maxlen = 7
-    maxutt = 10
-    maxchar = 30
     hidden = int(args.wordHidden) #40
     wordDecLayers = 1
     uttHidden = int(args.uttHidden) #400
@@ -574,16 +731,10 @@ if __name__ == "__main__":
     DEL_WT = 50
     ONE_LETTER_WT = 10
     METRIC = "logprob"
-
-    nUtts = len(text)
-
-    if args.acoustic:
-        pass 
-    else:
-        XC = uttsToCharVectors(uttChars, maxchar, ctable)
+    charDim = 39 if args.acoustic else len(chars)
 
     wordEncoder = Sequential()
-    wordEncoder.add(Dropout(charDropout, input_shape=(maxlen, len(chars)),
+    wordEncoder.add(Dropout(charDropout, input_shape=(maxlen, charDim),
                        noise_shape=(1, maxlen, 1)))
     wordEncoder.add(RNN(hidden, name="encoder-rnn"))
     # wordEncoder.add(RNN(hidden, input_shape=(maxlen, len(chars)),
@@ -596,16 +747,16 @@ if __name__ == "__main__":
         wordDecoder.add(RNN(hidden, return_sequences=True, 
                             name="decoder%i" % ii))
 
-    wordDecoder.add(TimeDistributed(Dense(len(chars), name="dense"), name="td"))
+    wordDecoder.add(TimeDistributed(Dense(charDim, name="dense"), name="td"))
     wordDecoder.add(Activation('softmax', name="softmax"))
 
-    wordEncoder.load_weights(pseudWeights, by_name=True)
-    wordDecoder.load_weights(pseudWeights, by_name=True)
+    #wordEncoder.load_weights(pseudWeights, by_name=True)
+    #wordDecoder.load_weights(pseudWeights, by_name=True)
 
     print("Build full model...")
 
     #input word encoders
-    inp = Input(shape=(maxutt, maxlen, len(chars)))
+    inp = Input(shape=(maxutt, maxlen, charDim))
     # encs = []
     # for ii in range(maxutt):
     #     slicer = Lambda(inputSliceClosure(ii),
@@ -640,13 +791,18 @@ if __name__ == "__main__":
     resh2 = TimeDistributed(wordDecoder)(decOut)
 
     model = Model(input=inp, output=resh2)
-    model.compile(loss='categorical_crossentropy',
-                  optimizer='adam',
-                  metrics=['accuracy'])
+    if args.acoustic:
+        model.compile(loss='mean_squared_logarithmic_error',
+                      optimizer='adam',
+                      metrics=['cosine_proximity'])
+    else:
+        model.compile(loss='categorical_crossentropy',
+                      optimizer='adam',
+                      metrics=['accuracy'])
     model.summary()
 
     segmenter = Sequential()
-    segmenter.add(RNN(segHidden, input_shape=(maxchar, len(chars)),
+    segmenter.add(RNN(segHidden, input_shape=(None, charDim),
                       return_sequences=True, name="segmenter"))
     segmenter.add(TimeDistributed(Dense(1)))
     segmenter.add(Activation("sigmoid"))
@@ -654,49 +810,75 @@ if __name__ == "__main__":
                       optimizer="adam")
     segmenter.summary()
 
-    print("Training setup...")
+    print("Pre-training autoencoder...")
+
+    if args.acoustic:
+        mfccs_joint = concatDocs(mfccs)
+        segs_init_joint = concatDocs(segs_init)
+
+    X_train = dict.fromkeys(doc_list)
+    utt_segs = dict.fromkeys(doc_list)
+    utt_lens = dict.fromkeys(doc_list)
+    deletedChars = dict.fromkeys(doc_list)
 
     ## pretrain
-    for iteration in range(10):
+    for iteration in range(1):
         print()
         print('-' * 50)
         print('Iteration', iteration)
 
-        ## set up matrices for pretraining
-        utts = uttChars
-        pSegs = .2 * np.ones((len(utts), maxchar))
+        for doc in doc_list:
+            if args.acoustic:
+                pSegs = segs2pSegsWithForced(segs_init[doc], forced[doc], alpha = 0.05)
+                segs = sampleFrameSegs(pSegs)
+                X_train[doc],deletedChars[doc] = splitMFCCs(mfccs[doc], segs, maxutt, maxlen, maxchar)
+            else:
+                utts = uttChars
+                pSegs = .2 * np.ones((len(utts), maxchar))
+                segs = sampleCharSegs(utts, pSegs)
+                X_train[doc],deletedChars[doc],oneLetter = charSegs2X(utts, segs,
+                                                     maxutt, maxlen, ctable)
+            if reverseUtt:
+                y_train = X_train[doc][:, ::-1, :]
+            else:
+                y_train = X_train[doc]
 
-        segs = sampleSegs(utts, pSegs)
+            print("Actual deleted chars from document %s:" %doc, deletedChars[doc].sum())
+            model.fit(X_train[doc], y_train, batch_size=BATCH_SIZE, nb_epoch=1)
+            toPrint = 10
+            preds = model.predict(X_train[doc][:toPrint], verbose=0)
+            if reverseUtt:
+                preds = preds[:, ::-1, :]
 
-        X_train,deletedChars,oneLetter = segsToX(utts, segs,
-                                                 maxutt, maxlen, ctable)
-        if reverseUtt:
-            y_train = X_train[:, ::-1, :]
+            for utt in range(toPrint):
+                if args.acoustic:
+                    pass
+                else:
+                    thisSeg = segs[utt]
+                    rText = reconstruct(utts[utt], thisSeg, maxutt)
+
+                    print(realize(rText, maxlen, maxutt))
+
+                    for wi in range(maxutt):
+                        guess = ctable.decode(preds[utt, wi], calc_argmax=True)
+                        print(guess, end=" ")
+                    print("\n")
+
+    allBestSegs = dict.fromkeys(doc_list)
+    for doc in doc_list:
+        if args.acoustic:
+            allBestSegs[doc] = np.zeros(segs_init[doc].shape)
         else:
-            y_train = X_train
+            allBestSegs[doc] = np.zeros((X_train[doc].shape[0], maxchar))
+    # If in text mode, no need to resample utterance boundaries at each epoch
+    if args.acoustic:
+        segs = segs_init
+        XC = mfccs
+    else:
+        XC = {'main': uttsToCharVectors(uttChars, maxchar, ctable)}
+    print()
 
-        print("Actual deleted chars:", deletedChars.sum())
-
-        model.fit(X_train, y_train, batch_size=BATCH_SIZE, nb_epoch=1)
-
-        toPrint = 10
-        preds = model.predict(X_train[:toPrint], verbose=0)
-        if reverseUtt:
-            preds = preds[:, ::-1, :]
-
-        for utt in range(toPrint):
-            thisSeg = segs[utt]
-            rText = reconstruct(utts[utt], thisSeg, maxutt)
-
-            print(realize(rText, maxlen, maxutt))
-
-            for wi in range(maxutt):
-                guess = ctable.decode(preds[utt, wi], calc_argmax=True)
-                print(guess, end=" ")
-            print("\n")
-
-    allBestSegs = np.zeros((X_train.shape[0], maxchar))
-
+    print('Co-training autoencoder and segmenter...')
     for iteration in range(81):
         print()
         print('-' * 50)
@@ -709,138 +891,189 @@ if __name__ == "__main__":
         epochDel = 0
         epochOneL = 0
 
-        for batch, inds in enumerate(batchIndices(X_train, BATCH_SIZE)):
-            printSome = False
-            if batch % 25 == 0:
-                print("Batch:", batch)
-                if batch == 0:
-                    printSome = True
-
-            XCb = XC[inds]
-            utts = uttChars[inds]
-
-            if iteration < 10:
-                nSamples = N_SAMPLES
-                pSegs = .1 * np.ones((len(utts), maxchar))
-            else:
-                nSamples = N_SAMPLES
-                pSegs = segmenter.predict(XCb, verbose=0)
-                #original shape has trailing 1
-                pSegs = np.squeeze(pSegs, -1)
-
-                #smooth this out a bit?
-                pSegs = .9 * pSegs + .1 * .5 * np.ones((len(utts), maxchar))
-                #print("pseg shape", pSegs.shape)
-
-            ## interpolate policies
-            # pSegsOff = .05 * np.ones((len(utts), maxchar))
-            # pSegsOn = segmenter.predict(XCb, verbose=0)
-            # pSegsOn = np.squeeze(pSegsOn, -1)
-            # pSegs = (1 - alpha) * pSegsOff + alpha * pSegsOn
-
-            scores = []
-            segSamples = []
-            dels = []
-            for sample in range(nSamples):
-                segs = sampleSegs(utts, pSegs)
-
-                Xb,deletedChars,oneLetter = segsToX(utts, segs,
-                                                    maxutt, maxlen, ctable)
-                if reverseUtt:
-                    yb = Xb[:, ::-1, :]
+        for doc in sorted(XC.keys()):
+            if args.acoustic: # Don't batch by utt
+                printSome = False
+                if iteration < 10:
+                    nSamples = N_SAMPLES
+                    pSegs = segs2pSegsWithForced(segs_init[doc], forced[doc], alpha = 0.05)
                 else:
-                    yb = Xb
+                    nSamples = N_SAMPLES
+                    pSegs = segmenter.predict(XC[doc], verbose=0)
+                    pSegs = np.squeeze(pSegs,-1)
+                    pSegs = .9 * pSegs + .1 * .5 * np.ones(pSegs.shape)
+                scores = []
+                segSamples = []
+                dels = []
+                for sample in range(nSamples):
+                    segs = sampleFrameSegs(pSegs)
+                    X,deletedChars = splitMFCCs(XC[doc], segs, maxutt, maxlen, maxchar)
+                    if reverseUtt:
+                        y = X[:, ::-1, :]
+                    else:
+                        y = X
 
-                loss = lossByUtt(model, Xb, yb, BATCH_SIZE, metric=METRIC)
-                scores.append(loss - DEL_WT * deletedChars
-                              - ONE_LETTER_WT * oneLetter)
-                segSamples.append(segs)
-                dels.append(deletedChars)
+                    loss = lossByUtt(model, X, y, X.shape[0], metric=METRIC)
+                    scores.append(np.sum(loss - DEL_WT * deletedChars)[None,...])
+                    segSamples.append(segs[None,...])
+                    dels.append(deletedChars[None,...])
+                segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
+                                                     metric=METRIC)
+                X,deleted = splitMFCCs(mfccs[doc], bestSegs,
+                                                    maxutt, maxlen, maxchar)
+                if reverseUtt:
+                    y = X[:, ::-1, :]
+                else:
+                    y = X
 
-            segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs,
-                                                 metric=METRIC)
+                allBestSegs[doc] = bestSegs
 
-            Xb, deleted, oneLetter = segsToX(utts, bestSegs,
-                                             maxutt, maxlen, ctable)
-            if reverseUtt:
-                yb = Xb[:, ::-1, :]
+                loss = model.train_on_batch(X, y)
+                segmenter.train_on_batch(XC[doc][None,...], np.expand_dims(segProbs, 2))
+                epochLoss += loss[0]
+                epochDel += deleted.sum()
+
             else:
-                yb = Xb
+                for batch, inds in enumerate(batchIndices(X_train[doc], BATCH_SIZE)):
+                    printSome = False
+                    if batch % 25 == 0:
+                        print("Batch:", batch)
+                        if batch == 0:
+                            printSome = True
 
-            allBestSegs[inds] = bestSegs
+                    XCb = XC[doc][inds]
+                    utts = uttChars[inds]
+                    segLen = len(utts)
 
-            loss = model.train_on_batch(Xb, yb)
-            segmenter.train_on_batch(XCb, np.expand_dims(segProbs, 2))
-            epochLoss += loss[0]
-            epochDel += deleted.sum()
-            epochOneL += oneLetter.sum()
+                    if iteration < 10:
+                        nSamples = N_SAMPLES
+                        pSegs = .1 * np.ones((segLen, maxchar))
+                    else:
+                        nSamples = N_SAMPLES
+                        pSegs = segmenter.predict(XCb, verbose=0)
+                        #original shape has trailing 1
+                        pSegs = np.squeeze(pSegs, -1)
 
-            # if batch % 25 == 0:
-            #     print("Loss:", loss)
-            #     print("Mean deletions:", np.array(dels).sum(axis=1).mean())
-            #     print("Deletions in best:", deleted.sum())
+                        #smooth this out a bit?
+                        pSegs = .9 * pSegs + .1 * .5 * np.ones((segLen, maxchar))
+                        #print("pseg shape", pSegs.shape)
 
-            if printSome:
-                toPrint = 10
+                    ## interpolate policies
+                    # pSegsOff = .05 * np.ones((segLen, maxchar))
+                    # pSegsOn = segmenter.predict(XCb, verbose=0)
+                    # pSegsOn = np.squeeze(pSegsOn, -1)
+                    # pSegs = (1 - alpha) * pSegsOff + alpha * pSegsOn
 
-                predLst = []
+                    scores = dict.fromkeys(doc_list, [])
+                    segSamples = dict.fromkeys(doc_list, [])
+                    dels = dict.fromkeys(doc_list, [])
+                    for sample in range(nSamples):
+                        segs = sampleCharSegs(utts, pSegs)
+                        Xb,deletedChars,oneLetter = charSegs2X(utts, segs,
+                                                                maxutt, maxlen, ctable)
+                        if reverseUtt:
+                            yb = Xb[:, ::-1, :]
+                        else:
+                            yb = Xb
 
-                for smp in range(nSamples):
-                    segs = segSamples[smp]
-                    Xb, deleted,oneLetter = segsToX(utts, segs,
-                                                    maxutt, maxlen, ctable)
+                        loss = lossByUtt(model, Xb, yb, BATCH_SIZE, metric=METRIC)
+                        scores[doc].append(loss - DEL_WT * deletedChars
+                                      - ONE_LETTER_WT * oneLetter)
+                        segSamples[doc].append(segs)
+                        dels[doc].append(deletedChars)
+
+                    segProbs, bestSegs = guessSegTargets(scores[doc], segSamples[doc], pSegs,
+                                                         metric=METRIC)
+                    
+                    Xb, deleted, oneLetter = charSegs2X(utts, bestSegs,
+                                                     maxutt, maxlen, ctable)
                     if reverseUtt:
                         yb = Xb[:, ::-1, :]
                     else:
                         yb = Xb
 
-                    preds = model.predict(Xb[:toPrint], verbose=0)
-                    if reverseUtt:
-                        preds = preds[:, ::-1, :]
-                    predLst.append(preds)
+                    allBestSegs[doc][inds] = bestSegs
 
-                #augment everything with the post-computed "best"
-                segs = bestSegs
-                Xb, deleted, oneLetter = segsToX(utts, segs,
-                                                 maxutt, maxlen, ctable)
-                if reverseUtt:
-                    yb = Xb[:, ::-1, :]
-                else:
-                    yb = Xb
+                    loss = model.train_on_batch(Xb, yb)
+                    segmenter.train_on_batch(XCb, np.expand_dims(segProbs, 2))
+                    epochLoss += loss[0]
+                    epochDel += deleted.sum()
+                    epochOneL += oneLetter.sum()
 
-                preds = model.predict(Xb[:toPrint], verbose=0)
-                if reverseUtt:
-                    preds = preds[:, ::-1, :]
-                predLst.append(preds)
-                segSamples.append(bestSegs)
-                scores.append(lossByUtt(model, Xb, yb, BATCH_SIZE,))
+                    # if batch % 25 == 0:
+                    #     print("Loss:", loss)
+                    #     print("Mean deletions:", np.array(dels[doc]).sum(axis=1).mean())
+                    #     print("Deletions in best:", deleted.sum())
 
-                for utt in range(toPrint):
-                    for smp in [nSamples,]: #range(N_SAMPLES + 1):
-                        #print(utts[utt])
+                    if printSome:
+                        toPrint = 10
 
-                        thisSeg = segSamples[smp][utt]
-                        rText = reconstruct(utts[utt], thisSeg, maxutt)
+                        predLst = []
 
-                        print(realize(rText, maxlen, maxutt))
+                        for smp in range(nSamples):
+                            segs = segSamples[doc][smp]
+                            Xb, deleted,oneLetter = charSegs2X(utts, segs,
+                                                            maxutt, maxlen, ctable)
+                            if reverseUtt:
+                                yb = Xb[:, ::-1, :]
+                            else:
+                                yb = Xb
 
-                        for wi in range(maxutt):
-                            guess = ctable.decode(
-                                predLst[smp][utt, wi], calc_argmax=True)
-                            print(guess, end=" ")
+                            preds = model.predict(Xb[:toPrint], verbose=0)
+                            if reverseUtt:
+                                preds = preds[:, ::-1, :]
+                            predLst.append(preds)
+
+                        #augment everything with the post-computed "best"
+                        segs = bestSegs
+                        Xb, deleted, oneLetter = charSegs2X(utts, segs,
+                                                         maxutt, maxlen, ctable)
+                        if reverseUtt:
+                            yb = Xb[:, ::-1, :]
+                        else:
+                            yb = Xb
+
+                        preds = model.predict(Xb[:toPrint], verbose=0)
+                        if reverseUtt:
+                            preds = preds[:, ::-1, :]
+                        predLst.append(preds)
+                        segSamples[doc].append(bestSegs)
+                        scores[doc].append(lossByUtt(model, Xb, yb, BATCH_SIZE,))
+
+                        for utt in range(toPrint):
+                            for smp in [nSamples,]: #range(N_SAMPLES + 1):
+                                if args.acoustic:
+                                    pass
+                                else:
+                                    #print(utts[utt])
+
+                                    thisSeg = segSamples[doc][smp][utt]
+                                    rText = reconstruct(utts[utt], thisSeg, maxutt)
+
+                                    print(realize(rText, maxlen, maxutt))
+
+                                    for wi in range(maxutt):
+                                        guess = ctable.decode(
+                                            predLst[smp][utt, wi], calc_argmax=True)
+                                        print(guess, end=" ")
+                                    print()
+                                    print([smp])
+                                    print([utt])
+                                    print("Score", scores[doc][smp][utt], "del", deleted[utt])
                         print()
-                        print("Score", scores[smp][utt], "del", deleted[utt])
-                print()
 
         print("Loss:", epochLoss)
         print("Deletions:", epochDel)
         print("One letter words:", epochOneL)
-        printSegScore(text, allBestSegs)
+        printSegScore(text, allBestSegs, intervals, acoustic=True)
         writeLog(iteration, epochLoss, epochDel, 
-                 text, allBestSegs, logfile)
+                 text, allBestSegs, logfile, intervals, args.acoustic)
 
         if iteration % 10 == 0:
-            writeSolutions(logdir, model, segmenter,
-                           allBestSegs, text, iteration)
+            if args.acoustic:
+                printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs)) 
+            else:
+                writeSolutions(logdir, model, segmenter,
+                               allBestSegs, text, iteration)
 
     print("Logs in", logdir)

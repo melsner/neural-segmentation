@@ -85,7 +85,7 @@ endif
 #
 ################################################################################
 
-zerospeech-data: build/zerospeech/sample/mfccs build/zerospeech/english/mfccs
+zerospeech-data: build/zerospeech/sample/mfccs build/zerospeech/english/mfccs build/zerospeech/english/rasanen_seg.txt 
 
 clean:
 	rm -rf build
