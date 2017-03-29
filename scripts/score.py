@@ -85,13 +85,10 @@ def scoreBreaks(surface, found):
 
 def scoreFrameSegs(actual, found, tol=0.03, verbose=False):
     matched_b = matched_w = 0
-    # Use word counts
-    proposed_w = len(found)
-    actual_w = len(actual)
-
-    # Will initially be word counts + 1 for final fencepost.
-    # Will need to increment for any skipped regions
-    proposed_b, actual_b = proposed_w+1,actual_w+1
+    matched_b_start = matched_b_end = 0
+    # Initialize to 1 because of final fencepost
+    proposed_b = actual_b = 1
+    proposed_w = actual_w = 1
 
     # Initialize pointers that will be use to crawl the segmentations
     a_ptr = f_ptr = 0
@@ -103,22 +100,29 @@ def scoreFrameSegs(actual, found, tol=0.03, verbose=False):
     # Variables that contain the most recent segment endpoint
     # Will be used for checking for skipped silence.
     last_a = actual[a_ptr][0]
+    a_e = last_a
     last_f = found[f_ptr][0]
-    
+    f_e = last_f
+    same_start = np.allclose(last_a, last_f, rtol= 0., atol = tol)
+    a_jump_count = f_jump_count = joint_jump_count = int(same_start)
+    last_matched_end = 0.
+
     # As long as neither list is consumed...
-    while a_ptr < actual_w and f_ptr < proposed_w:
+    while a_ptr < len(actual) and f_ptr < len(found):
         
         # Next actual segment
         a_s, a_e = actual[a_ptr]
         # Next found segment
         f_s, f_e = found[f_ptr]
 
+       # print((a_s,a_e),(f_s,f_e))
         # Check whether any silence was skipped since the last segmentation.
         # If true, additional fenceposts and checks must be added
         # for the end of the last segmentation, since only the start
         # was checked.
         a_jumped = not np.allclose(a_s, last_a)
         f_jumped = not np.allclose(f_s, last_f)
+
         if a_jumped or f_jumped:
             if verbose:
                 if a_jumped:
@@ -126,22 +130,18 @@ def scoreFrameSegs(actual, found, tol=0.03, verbose=False):
                 if f_jumped:
                     print('F will jump.')
             # Add a match if the interval ends matched for the previous segmentation.
-            if np.allclose(actual[a_ptr-a_jumped][a_jumped], found[f_ptr-f_jumped][f_jumped], rtol= 0., atol = tol):
-                if verbose:
-                    print('Ends match before skipped silence.')
-                matched_b += 1
-                if verbose and last_match:
-                    print('Word match.')
-                matched_w += last_match
-                # Current segmentation can't finish a word since there was preceding
-                # silence in one or both segmentations.
-                last_match = 0
-            if a_jumped:
-                # Add an extra actual if there was skipped silence in actual
-                actual_b += 1
-            if f_jumped:
-                # Add an extra proposed if there was skipped silence in proposed
-                proposed_b += 1
+            if np.allclose(actual[a_ptr-a_jumped][a_jumped], found[f_ptr-f_jumped][f_jumped], rtol=0., atol=tol):
+                if not np.allclose(last_matched_end, actual[a_ptr-a_jumped][a_jumped], rtol=0., atol=tol):
+                    if verbose:
+                        print('Ends match before skipped silence.')
+                    matched_b_end += 1
+                    if verbose and last_match:
+                        print('Word match.')
+                    matched_w += last_match
+                    # Current segmentation can't finish a word since there was preceding
+                    # silence in one or both segmentations.
+                    last_match = 0
+                    last_matched_end = actual[a_ptr-a_jumped][a_jumped]
 
         if verbose:
             print('')
@@ -152,7 +152,7 @@ def scoreFrameSegs(actual, found, tol=0.03, verbose=False):
         if np.allclose(a_s, f_s, rtol = 0., atol = tol):
             if verbose:
                 print('Starts match.')
-            matched_b += 1
+            matched_b_start += 1
             # It's a word match if both this check and the previous one were matches
             matched_w += last_match
             if verbose and last_match:
@@ -160,27 +160,81 @@ def scoreFrameSegs(actual, found, tol=0.03, verbose=False):
             last_match = 1
             # Pop off the segmentation point from both lists
             a_ptr += 1
+            actual_b += 1
+            actual_w += 1
             f_ptr += 1
+            proposed_b += 1
+            proposed_w += 1
             last_a = a_e
+            if a_jumped:
+                # Add an extra actual if there was skipped silence in actual
+                a_jump_count += 1
+                actual_b += 1
             last_f = f_e
+            if f_jumped:
+                # Add an extra proposed if there was skipped silence in proposed
+                f_jump_count += 1
+                proposed_b += 1
+            if a_jumped and f_jumped:
+                joint_jump_count += 1
         elif f_s < a_s:
             # Mismatch and found segment starts earlier than actual
             # Pop off found segment
             f_ptr += 1
+            proposed_b += 1
+            proposed_w += 1
             last_f = f_e
+            if f_jumped:
+                f_jump_count += 1
+                proposed_b += 1
             # This was not a match
             last_match = 0
         else: # a_s < f_s
             # Same...
             a_ptr += 1
+            actual_b += 1
+            actual_w += 1
             last_a = a_e
+            if a_jumped:
+                a_jump_count += 1
+                actual_b += 1
             last_match = 0
 
+    final_match = False
+
     # Check the final bound for a match
-    if np.allclose(a_e, f_e, rtol = 0., atol = 0.02):
-            matched_b += 1
+    while a_ptr < len(actual) and not final_match:
+        a_e = actual[a_ptr][1]
+        if np.allclose(a_e, f_e, rtol = 0., atol = tol):
+            matched_b_end += 1
             matched_w += last_match
-  
+            final_match = True
+        a_ptr += 1
+        actual_b += 1
+        actual_w += 1
+
+    while f_ptr < len(found) and not final_match:
+        f_e = found[f_ptr][1]
+        if np.allclose(a_e, f_e, rtol = 0., atol = tol):
+            matched_b_end += 1
+            matched_w += last_match
+            final_match = True
+        f_ptr += 1
+        proposed_b += 1
+        proposed_w += 1
+
+    if not final_match and np.allclose(a_e, f_e, rtol = 0., atol = tol):
+        matched_b_end += 1
+        matched_w += last_match
+
+ 
+    matched_b = matched_b_start+matched_b_end
+
+    if verbose:
+        print('Number of shared segment starts = %s' %matched_b_start)
+        print('Number of shared segment ends at speech interval ends = %s' %matched_b_end)
+        print('Number of shared speech intervals = %s' %joint_jump_count)
+    
     return (matched_b, actual_b, proposed_b), \
            precision_recall_f(matched_b, actual_b, proposed_b), \
            (matched_w, actual_w, proposed_w), \
