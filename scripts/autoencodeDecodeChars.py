@@ -50,12 +50,12 @@ def uttsToWordVectors(text, maxutts, maxlen, chars):
 
     return X
 
-def padFrameUtt(utt, maxutt, maxlen):
+def padFrameUtt(utt, maxutt, maxlen, FRAME_SIZE):
     deleted = sum([len(x) for x in utt[maxutt:]])
     utt = utt[:maxutt]
     nWds = len(utt)
     for i,word in enumerate(utt):
-        utt[i], deleted_wrd = padFrameWord(word,maxlen)
+        utt[i], deleted_wrd = padFrameWord(word,maxlen,FRAME_SIZE)
         deleted += deleted_wrd
     corr = max(0, maxutt - nWds)
     for i in xrange(corr):
@@ -66,8 +66,8 @@ def padFrameUtt(utt, maxutt, maxlen):
     assert utt.shape == (maxutt, maxlen, FRAME_SIZE), 'Utterance shape after padding should be %s, was actually %s.' %((maxutt, maxlen, FRAME_SIZE), utt.shape)
     return utt, deleted
 
-def padFrameWord(word, maxlen):
-    deleted = len(word[maxlen:])
+def padFrameWord(word, maxlen, FRAME_SIZE):
+    deleted = max(0, word.shape[0]-maxlen)
     word = word[:maxlen,:]
     padChrs = np.zeros((max(0, maxlen-word.shape[0]),FRAME_SIZE))
     padChrs[:,-1] = 1.
@@ -178,7 +178,7 @@ def lossByUtt(model, Xb, yb, BATCH_SIZE, metric="logprob"):
         pRight = logP * yb
         #sum out word, char, len(chars)
         return pRight.sum(axis=(1, 2, 3))
-    elif metric == 'msq':
+    elif metric == 'mse':
         return np.mean((preds - yb)**2, axis=(1,2,3))
     else:
         right = (np.argmax(preds, axis=-1) == np.argmax(yb, axis=-1))
@@ -202,7 +202,7 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
         eScores = np.exp(scores - MM)
         #approximately the probability of the sample given the data
         pSeg = eScores / eScores.sum(axis=0, keepdims=True)
-    elif metric == 'msq':
+    elif metric == 'mse':
         MM = np.max(-scores, axis=0, keepdims=True)
         eScores = np.exp(-scores - MM)
         #approximately the probability of the sample given the data
@@ -409,7 +409,7 @@ def writeLog(iteration, epochLoss, epochDel, text, allBestSeg, logdir, intervals
         for doc in scores:
             if scores[doc] != None and not doc == '##overall##':
                 _, (bp,br,bf), _, (swp,swr,swf) = scores[doc]
-                with open(logdir+doc+'_log.txt', 'wb') as f:
+                with open(logdir+doc+'_log.txt', 'ab') as f:
                     if print_headers:
                         print("\t".join([
                                         "iteration", "epochLoss", "epochDel", 
@@ -419,7 +419,7 @@ def writeLog(iteration, epochLoss, epochDel, text, allBestSeg, logdir, intervals
                                     iteration, epochLoss, epochDel, bp, br, bf, swp, swr, swf,]]),
                                     file=f)
         _, (bp,br,bf), _, (swp,swr,swf) = scores['##overall##']
-        with open(logdir+'log.txt', 'wb') as f:
+        with open(logdir+'log.txt', 'ab') as f:
             if print_headers:
                 print("\t".join([
                                 "iteration", "epochLoss", "epochDel", 
@@ -554,7 +554,7 @@ def filterMFCCs(mfccs, intervals, segs, FRAME_SIZE=40):
     return mfcc_intervals
 
 
-def splitMFCCs(mfcc_intervals,segs,maxutt,maxlen,maxchar,word_segs=True):
+def splitMFCCs(mfcc_intervals,segs,maxutt,maxlen,maxchar,FRAME_SIZE,word_segs=True):
     # Split mfcc intervals according to segs
     out = {}
     deletedChars = []
@@ -562,19 +562,41 @@ def splitMFCCs(mfcc_intervals,segs,maxutt,maxlen,maxchar,word_segs=True):
     utts = []
     utt = []
     utt_len_chars = 0
-    while len(words) > 0:
-        w = words.pop(0)
-        while utt_len_chars <= maxchar and len(utt) < maxutt and len(words) > 0:
-            utt_len_chars += w.shape[0]
-            w = words.pop(0)
-        if word_segs:
-            utt, deleted_utt = padFrameUtt(utt, maxutt, maxlen)
+    w = words.pop(0)
+    w_len = w.shape[0]
+    while w != None:
+        # Handle case when single word length exceeds maxchar
+        if w_len > maxchar:
+            utt.append(w)
+            if len(words) > 0:
+                w = words.pop(0)
+                w_len = w.shape[0]
+            else:
+                w = None
         else:
-            utt, deleted_utt = padFrameWord(np.concatenate(utt,axis=0),maxchar)
+            while utt_len_chars + w_len <= maxchar and len(utt) + 1 <= maxutt:
+                utt.append(w)
+                utt_len_chars += w_len
+                if len(words) > 0:
+                    w = words.pop(0)
+                    w_len = w.shape[0]
+                else:
+                    w = None
+                    break
+        if word_segs:
+            utt, deleted_utt = padFrameUtt(utt, maxutt, maxlen, FRAME_SIZE)
+        else:
+            utt, deleted_utt = padFrameWord(np.concatenate(utt,axis=0), maxchar, FRAME_SIZE)
         utts.append(utt)
         deletedChars.append(deleted_utt)
-        utt = [w]
-        utt_len_chars = w.shape[0]
+        if w != None:
+            utt = []
+            utt_len_chars = 0
+        else:
+            utt = None
+    if utt != None:
+        utts.append(utt)
+        deletedChars.append(deleted_utt)
     utts = np.stack(utts,axis=0)
     deletedChars = np.asarray(deletedChars)
     return utts, deletedChars
@@ -795,7 +817,7 @@ if __name__ == "__main__":
     segHidden = int(args.segHidden) #100
     wordDropout = float(args.wordDropout) #.5
     charDropout = float(args.charDropout) #.5
-    pretrain_iters = 1
+    pretrain_iters = 10
     train_noseg_iters = 10
     train_tot_iters = 81
     RNN = recurrent.LSTM
@@ -804,7 +826,7 @@ if __name__ == "__main__":
     DEL_WT = 50
     ONE_LETTER_WT = 10
     if args.acoustic:
-        METRIC = 'msq'
+        METRIC = 'mse'
     else:
         METRIC = "logprob"
     charDim = FRAME_SIZE if args.acoustic else len(chars)
@@ -922,13 +944,15 @@ if __name__ == "__main__":
         pretrain = obj['pretrain']
         random_doc_list = obj['random_doc_list']
         doc_ix = obj['doc_ix']
-        allBestSegs = obj['allBestSegs']
+        allBestSegs = obj.get('allBestSegs', None)
+        deletedChars = obj['deletedChars']
         reshuffle_doc_list=False
     else:
         print('No training checkpoint found. Starting training from beginning.')
         iteration = 0
         pretrain = True
         allBestSegs = None
+        deletedChars = None
         reshuffle_doc_list=True
 
     print()
@@ -941,7 +965,8 @@ if __name__ == "__main__":
     X_train = dict.fromkeys(doc_list)
     utt_segs = dict.fromkeys(doc_list)
     utt_lens = dict.fromkeys(doc_list)
-    deletedChars = dict.fromkeys(doc_list)
+    if deletedChars == None:
+        deletedChars = dict.fromkeys(doc_list)
 
     ## pretrain
     while iteration < pretrain_iters and pretrain:
@@ -959,7 +984,7 @@ if __name__ == "__main__":
                 print(doc)
                 pSegs = segs2pSegsWithForced(segs_init[doc], forced[doc], alpha = 0.05)
                 segs = sampleFrameSegs(pSegs)
-                X_train[doc],deletedChars[doc] = splitMFCCs(mfccs[doc], segs, maxutt, maxlen, maxchar)
+                X_train[doc],deletedChars[doc] = splitMFCCs(mfccs[doc], segs, maxutt, maxlen, maxchar, FRAME_SIZE)
             else:
                 utts = uttChars
                 pSegs = .2 * np.ones((len(utts), maxchar))
@@ -981,7 +1006,8 @@ if __name__ == "__main__":
                 obj = {'iteration': iteration,
                        'pretrain': True,
                        'random_doc_list': random_doc_list,
-                       'doc_ix': doc_ix}
+                       'doc_ix': doc_ix,
+                       'deletedChars': deletedChars}
                 pickle.dump(obj, f)
 
             toPrint = 10
@@ -1069,7 +1095,7 @@ if __name__ == "__main__":
                 dels = []
                 for sample in range(nSamples):
                     segs = sampleFrameSegs(pSegs)
-                    X,deletedChars = splitMFCCs(XC[doc], segs, maxutt, maxlen, maxchar)
+                    X,deletedChars = splitMFCCs(XC[doc], segs, maxutt, maxlen, maxchar, FRAME_SIZE)
                     if reverseUtt:
                         y = X[:, ::-1, :]
                     else:
@@ -1082,7 +1108,7 @@ if __name__ == "__main__":
                 segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
                                                      metric=METRIC)
                 X,deleted = splitMFCCs(mfccs[doc], bestSegs,
-                                                    maxutt, maxlen, maxchar)
+                                                    maxutt, maxlen, maxchar, FRAME_SIZE)
                 if reverseUtt:
                     y = X[:, ::-1, :]
                 else:
@@ -1236,7 +1262,8 @@ if __name__ == "__main__":
                        'pretrain': False,
                        'random_doc_list': random_doc_list,
                        'doc_ix': doc_ix,
-                       'allBestSegs': allBestSegs}
+                       'allBestSegs': allBestSegs,
+                       'deletedChars': deletedChars,}
                 pickle.dump(obj, f)
 
 
