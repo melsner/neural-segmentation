@@ -1017,6 +1017,7 @@ if __name__ == "__main__":
 
             for utt in range(toPrint):
                 if args.acoustic:
+                    pass
                     #print('Source (1st dim, 1st 100 characters):')
                     #print(mfccs[doc][:100,0])
                     #for i in range(5):
