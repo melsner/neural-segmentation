@@ -1016,13 +1016,13 @@ if __name__ == "__main__":
                 preds = preds[:, ::-1, :]
 
             for utt in range(toPrint):
-                if args.acoustic and False:
-                    print('Source (1st dim, 1st 100 characters):')
-                    print(mfccs[doc][:100,0])
-                    for i in range(5):
-                        print('Segmented (1st dim, word %i):' %i)
-                        print(X_train[doc][0,i,:,0])
-                    print()
+                if args.acoustic:
+                    #print('Source (1st dim, 1st 100 characters):')
+                    #print(mfccs[doc][:100,0])
+                    #for i in range(5):
+                    #    print('Segmented (1st dim, word %i):' %i)
+                    #    print(X_train[doc][0,i,:,0])
+                    #print()
                 else:
                     thisSeg = segs[utt]
                     rText = reconstruct(utts[utt], thisSeg, maxutt)
