@@ -85,7 +85,9 @@ endif
 #
 ################################################################################
 
-zerospeech-data: build/zerospeech/sample/mfccs build/zerospeech/english/mfccs build/zerospeech/english/rasanen_seg.txt 
+zerospeech-%: build/zerospeech/%/mfccs build/zerospeech/%/rasanen_seg.txt scripts/autoencodeDecodeChars.py \
+data/%.wrd
+	python $(word 3, $^) $(dir $(word 1, $^)) --segfile $(word 2, $^) --goldfile $(word 4, $^) --logfile outputs/$*/ --acoustic --gpufrac None
 
 clean:
 	rm -rf build
@@ -94,6 +96,9 @@ config build:
 	mkdir $@
 
 build/zerospeech/%/:
+	mkdir -p $@
+
+outputs/%/:
 	mkdir -p $@
 
 build/zerospeech/%/rasanen_seg.txt: scripts/rasanen2seginit.py data/rasanen_seg_%_src.txt
@@ -126,4 +131,5 @@ build/zerospeech/english/feats-wspecifier.scp: $(ZSPEECH-ENGLISH)
 %mfccs: %wav-rspecifier.scp %feats-wspecifier.scp $(KALDIDIR)/src/featbin/compute-mfcc-feats $(KALDIDIR)/src/featbin/add-deltas $(CONFIGDIR)/user-kaldi-directory.txt
 	$(word 3, $^) scp:$(abspath $(word 1, $^)) scp:$(abspath $(word 2, $^))
 	$(word 4, $^) scp:$(abspath $(word 2, $^)) scp,t:$(abspath $(word 2, $^))
+	echo 'Done' > $@
 

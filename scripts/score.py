@@ -83,7 +83,7 @@ def scoreBreaks(surface, found):
 
     return precision_recall_f(matched, actual, proposed)
 
-def scoreFrameSegs(actual, found, tol=0.02):
+def scoreFrameSegs(actual, found, tol=0.03, verbose=False):
     matched_b = matched_w = 0
     # Use word counts
     proposed_w = len(found)
@@ -120,9 +120,18 @@ def scoreFrameSegs(actual, found, tol=0.02):
         a_jumped = not np.allclose(a_s, last_a)
         f_jumped = not np.allclose(f_s, last_f)
         if a_jumped or f_jumped:
+            if verbose:
+                if a_jumped:
+                    print('A will jump.')
+                if f_jumped:
+                    print('F will jump.')
             # Add a match if the interval ends matched for the previous segmentation.
-            if np.allclose(actual[a_ptr-a_jumped][1], found[f_ptr-f_jumped][1], rtol= 0., atol = tol):
+            if np.allclose(actual[a_ptr-a_jumped][a_jumped], found[f_ptr-f_jumped][f_jumped], rtol= 0., atol = tol):
+                if verbose:
+                    print('Ends match before skipped silence.')
                 matched_b += 1
+                if verbose and last_match:
+                    print('Word match.')
                 matched_w += last_match
                 # Current segmentation can't finish a word since there was preceding
                 # silence in one or both segmentations.
@@ -134,31 +143,40 @@ def scoreFrameSegs(actual, found, tol=0.02):
                 # Add an extra proposed if there was skipped silence in proposed
                 proposed_b += 1
 
+        if verbose:
+            print('')
+            print('Last gold: %s. Last found: %s.' %(last_a,last_f))
+            print('Gold: %s %s. Found: %s %s.' %(a_s,a_e,f_s,f_e))
+
         # Check whether current start points align within tolerance window 
         if np.allclose(a_s, f_s, rtol = 0., atol = tol):
+            if verbose:
+                print('Starts match.')
             matched_b += 1
             # It's a word match if both this check and the previous one were matches
             matched_w += last_match
+            if verbose and last_match:
+                print('Word match (see preceding comparison).')
             last_match = 1
             # Pop off the segmentation point from both lists
             a_ptr += 1
             f_ptr += 1
+            last_a = a_e
+            last_f = f_e
         elif f_s < a_s:
             # Mismatch and found segment starts earlier than actual
             # Pop off found segment
             f_ptr += 1
+            last_f = f_e
             # This was not a match
             last_match = 0
         else: # a_s < f_s
             # Same...
             a_ptr += 1
+            last_a = a_e
             last_match = 0
-        # Update record of most recent segmentation endpoint
-        # for silence checks at next iter
-        last_a = a_e
-        last_f = f_e
 
-    # The the final bound for a match
+    # Check the final bound for a match
     if np.allclose(a_e, f_e, rtol = 0., atol = 0.02):
             matched_b += 1
             matched_w += last_match

@@ -59,16 +59,20 @@ def padFrameUtt(utt, maxutt, maxlen):
         deleted += deleted_wrd
     corr = max(0, maxutt - nWds)
     for i in xrange(corr):
-        utt.append(np.zeros((maxlen,39)))
+        padWrd = np.zeros((maxlen,FRAME_SIZE))
+        padWrd[:,-1] = 1.0
+        utt.append(padWrd)
     utt = np.stack(utt, axis=0)
-    assert utt.shape == (maxutt, maxlen, 39), 'Utterance shape after padding should be %s, was actually %s.' %((maxutt, maxlen, 39), utt.shape)
+    assert utt.shape == (maxutt, maxlen, FRAME_SIZE), 'Utterance shape after padding should be %s, was actually %s.' %((maxutt, maxlen, FRAME_SIZE), utt.shape)
     return utt, deleted
 
 def padFrameWord(word, maxlen):
     deleted = len(word[maxlen:])
     word = word[:maxlen,:]
-    word = np.append(word, np.zeros((max(0, maxlen-word.shape[0]),39)),0)
-    assert word.shape == (maxlen,39), 'Word shape after padding should be %s, was actually %s.' %((maxlen,93), word.shape)
+    padChrs = np.zeros((max(0, maxlen-word.shape[0]),FRAME_SIZE))
+    padChrs[:,-1] = 1.
+    word = np.append(word, padChrs,0)
+    assert word.shape == (maxlen,FRAME_SIZE), 'Word shape after padding should be %s, was actually %s.' %((maxlen,FRAME_SIZE), word.shape)
     return word, deleted
 
 def inputSliceClosure(dim):
@@ -373,11 +377,11 @@ def printSegScore(text, allBestSeg, intervals=None, acoustic=False, out_file=Non
                 (lp,lr,lf) = scoreLexicon(text, segmented)
                 print("LP %4.2f LR %4.2f LF %4.2f" % (100 * lp, 100 * lr, 100 * lf), file=out_file)
         else:
-            print('Warning: Document ID "%s" in training data but not in gold. Skipping evaluation for this file.')
+            print('Warning: Document ID "%s" in training data but not in gold. Skipping evaluation for this file.' %doc,file=out_file)
     if acoustic:
         bp,br,bf = precision_recall_f(bm_tot,ba_tot,bP_tot)
         swp,swr,swf = precision_recall_f(swm_tot,swa_tot,swP_tot)
-        print('Overall scores:', file=out_file)
+        print('Overall score:', file=out_file)
         print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
         print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
 
@@ -470,6 +474,9 @@ def readMFCCs(path, filter_file=None):
 
     mfcc_lists = {}
 
+    first = True
+    FRAME_SIZE = 0
+
     for p in filelist:
         mfcc_counter = 0
         file_id = basename.match(p).group(1)
@@ -482,16 +489,20 @@ def readMFCCs(path, filter_file=None):
                     if line.strip().endswith(']'):
                         line = line.strip()[:-1]
                     else:
-                        mfcc = map(float, line.strip().split())
+                        mfcc = map(float, line.strip().split()) + [0.0] # Extra dim for padding indicator
+                    if first:
+                        FRAME_SIZE = len(mfcc) 
+                        first = False
+                    assert len(mfcc) == FRAME_SIZE, 'ERROR: MFCC size (%d) in file "%s" does not agree with inferred frame size (%d).' %(len(mfcc)-1,p,FRAME_SIZE-1)
                     mfcc_lists[file_id].append(mfcc)
         mfcc_lists[file_id] = np.asarray(mfcc_lists[file_id])
-    return mfcc_lists
+    return mfcc_lists, FRAME_SIZE
 
-def filterMFCCs(mfccs, intervals, segs):
+def filterMFCCs(mfccs, intervals, segs, FRAME_SIZE=40):
     # Filter out non-speech portions
     mfcc_intervals = {}
     for doc in segs:
-        mfcc_intervals[doc] = np.zeros((0,39))
+        mfcc_intervals[doc] = np.zeros((0,FRAME_SIZE))
         for i in intervals[doc]:
             sf, ef = int(np.rint(float(i[0]*100))), int(np.rint(float(i[1]*100)))
             mfcc_intervals[doc] = np.append(mfcc_intervals[doc], mfccs[doc][sf:ef,:], 0)
@@ -537,7 +548,7 @@ def timeSeg2frameSeg(timeseg_file):
             if line.strip() != '':
                 doc, start, end = line.strip().split()[:3]
                 if doc in intervals:
-                    if float(start) == intervals[doc][-1][1]:
+                    if float(start) <= intervals[doc][-1][1]:
                         intervals[doc][-1] = (intervals[doc][-1][0],float(end))
                     else:
                         intervals[doc].append((float(start),float(end)))
@@ -558,6 +569,10 @@ def timeSeg2frameSeg(timeseg_file):
                     seg = 0
                 offset = offsets.get(doc, 0)
                 if doc in speech:
+                    # In rare cases, the Rasanen pre-seg system
+                    # generates a start time earlier than previous
+                    # interval's end time, requiring us to check this.
+                    s = max(s,speech[doc][-1][1])
                     speech[doc].append((s-offset,e-offset,seg))
                 else:
                     speech[doc] = [(s-offset,e-offset,seg)]
@@ -671,7 +686,7 @@ if __name__ == "__main__":
     try:
         args.gpufrac = float(args.gpufrac)
     except:
-        args.gpufrac = 0.15
+        args.gpufrac = None
 
     if args.segout:
         os.makedirs(args.segout)
@@ -700,14 +715,13 @@ if __name__ == "__main__":
         intervals, segs_init = timeSeg2frameSeg(args.segfile)
         forced = intervals2forcedSeg(intervals)
         text = readGoldFrameSeg(args.goldfile)
-        mfccs = filterMFCCs(readMFCCs(path), intervals, segs_init)
+        mfccs, FRAME_SIZE = readMFCCs(path)
+        mfccs = filterMFCCs(mfccs, intervals, segs_init, FRAME_SIZE)
         doc_list = sorted(list(mfccs.keys()))
         maxlen = 100  # at most 1 second per word 
         maxutt = 10   # at most 2 words per second (utterance average)
         maxchar = 400 # at most 4 seconds of speech per utterance
-        t1 = time.time()
-        print('Data loaded in %ds.' %(t1-t0))
-        print()
+        N_SAMPLES = 50
 
 #        print('Initial segmentation scores:')
 #        printSegScore(text,segs_init,intervals,True)
@@ -724,36 +738,31 @@ if __name__ == "__main__":
         maxlen = 7
         maxutt = 10
         maxchar = 30
+        N_SAMPLES = 50
     
-    if args.logfile == None:
-        logdir = "logs/" + str(os.getpid())
-    else:
-        logdir = "logs/" + args.logfile
-    os.makedirs(logdir)
-    print("Logging at", logdir)
-    logfile = file(logdir + "/log.txt", "w")
-    print("\t".join([
-                    "iteration", "epochLoss", "epochDel", 
-                    "bp", "br", "bf", "swp", "swr", "swf",
-                    "lp", "lr", "lf"]), file=logfile)
-
+    t1 = time.time()
+    print('Data loaded in %ds.' %(t1-t0))
+    print()
+    
     hidden = int(args.wordHidden) #40
     wordDecLayers = 1
     uttHidden = int(args.uttHidden) #400
     segHidden = int(args.segHidden) #100
     wordDropout = float(args.wordDropout) #.5
     charDropout = float(args.charDropout) #.5
+    pretrain_iters = 1
+    train_noseg_iters = 0
+    train_tot_iters = 81
     RNN = recurrent.LSTM
     reverseUtt = True
     BATCH_SIZE = 128
-    N_SAMPLES = 50
     DEL_WT = 50
     ONE_LETTER_WT = 10
     if args.acoustic:
         METRIC = 'msq'
     else:
         METRIC = "logprob"
-    charDim = 39 if args.acoustic else len(chars)
+    charDim = FRAME_SIZE if args.acoustic else len(chars)
 
     wordEncoder = Sequential()
     wordEncoder.add(Dropout(charDropout, input_shape=(maxlen, charDim),
@@ -835,6 +844,58 @@ if __name__ == "__main__":
                       optimizer="adam")
     segmenter.summary()
 
+    # Set up logging, load any saved data
+    load_models = False
+    if args.logfile == None:
+        logdir = "logs/" + str(os.getpid())
+    else:
+        logdir = "logs/" + args.logfile
+
+    if not os.path.exists(logdir):
+        os.makedirs(logdir)
+    else:
+        load_models = True
+    
+    print("Logging at", logdir)
+    logfile = file(logdir + "/log.txt", "w")
+    
+    if load_models and os.path.exists(logdir + 'model.h5'):
+        print('Autoencoder checkpoint found. Loading weights...')
+        model.load_weights(logdir + 'model.h5', by_name=True)
+    else:
+        print('No autoencoder checkpoint found. Keeping default initialization.')
+    if load_models and os.path.exists(logdir + 'segmenter.h5'):
+        print('Segmenter checkpoint found. Loading weights...')
+        segmenter.load_weights(logdir + 'segmenter.h5', by_name=True)
+    else:
+        print('No segmenter checkpoint found. Keeping default initialization.')
+    if load_models and os.path.exists(logdir + 'checkpoint.obj'):
+        print('Training checkpoint data found. Loading...')
+        with open(logdir + 'checkpoint.obj', 'rb') as f:
+            obj = pickle.load(f)
+        iteration = obj['iteration']
+        pretrain = obj['pretrain']
+        random_doc_list = obj['random_doc_list']
+        doc_ix = obj['doc_ix']
+        reshuffle_doc_list=False
+    else:
+        print('No training checkpoint found. Starting training from beginning.')
+        iteration = 0
+        pretrain = True
+        reshuffle_doc_list=True
+
+    
+    if args.acoustic:
+        print("\t".join([
+                        "iteration", "epochLoss", "epochDel", 
+                        "bp", "br", "bf", "swp", "swr", "swf"]),
+                        file=logfile)
+    else:
+        print("\t".join([
+                        "iteration", "epochLoss", "epochDel", 
+                        "bp", "br", "bf", "swp", "swr", "swf",
+                        "lp", "lr", "lf"]), file=logfile)
+
     print()
     print("Pre-training autoencoder...")
 
@@ -848,12 +909,18 @@ if __name__ == "__main__":
     deletedChars = dict.fromkeys(doc_list)
 
     ## pretrain
-    for iteration in range(10):
+    while iteration < pretrain_iters and pretrain:
         print()
         print('-' * 50)
         print('Iteration', iteration)
 
-        for doc in doc_list:
+        if reshuffle_doc_list:
+            random_doc_list = doc_list[:]
+            random.shuffle(random_doc_list)
+            doc_ix=0
+        print(random_doc_list)
+        while doc_ix < len(random_doc_list):
+            doc = random_doc_list[doc_ix]
             if args.acoustic:
                 print(doc)
                 pSegs = segs2pSegsWithForced(segs_init[doc], forced[doc], alpha = 0.05)
@@ -872,6 +939,15 @@ if __name__ == "__main__":
 
             print("Actual deleted chars from document %s:" %doc, deletedChars[doc].sum())
             model.fit(X_train[doc], y_train, batch_size=BATCH_SIZE, nb_epoch=1)
+
+            model.save(logdir + 'model.h5')
+            with open(logdir + 'checkpoint.obj', 'wb') as f:
+                obj = {'iteration': iteration,
+                       'pretrain': True,
+                       'random_doc_list': random_doc_list[doc_ix+1:],
+                       'doc_ix': doc_ix}
+                pickle.dump(obj, f)
+
             toPrint = 10
             preds = model.predict(X_train[doc][:toPrint], verbose=0)
             if reverseUtt:
@@ -891,13 +967,20 @@ if __name__ == "__main__":
                         print(guess, end=" ")
                     print("\n")
 
+            doc_ix += 1
+
+        iteration += 1
+        reshuffle_doc_list=True
+        if iteration == pretrain_iters:
+            pretrain = False
+            iteration = 0
+
     allBestSegs = dict.fromkeys(doc_list)
     for doc in doc_list:
         if args.acoustic:
             allBestSegs[doc] = np.zeros(segs_init[doc].shape)
         else:
             allBestSegs[doc] = np.zeros((X_train[doc].shape[0], maxchar))
-    # If in text mode, no need to resample utterance boundaries at each epoch
     if args.acoustic:
         segs = segs_init
         XC = mfccs
@@ -906,7 +989,8 @@ if __name__ == "__main__":
     print()
 
     print('Co-training autoencoder and segmenter...')
-    for iteration in range(81):
+    iteration = 0
+    while iteration < train_tot_iters:
         t0 = time.time()
         print()
         print('-' * 50)
@@ -919,10 +1003,25 @@ if __name__ == "__main__":
         epochDel = 0
         epochOneL = 0
 
-        for doc in sorted(XC.keys()):
+        tdoc1 = None
+        tdoc2 = None
+
+        if reshuffle_doc_list:
+            random_doc_list = doc_list[:]
+            random.shuffle(random_doc_list)
+            doc_ix=0
+        print(random_doc_list)
+        while doc_ix < len(random_doc_list):
+            doc = random_doc_list[doc_ix]
+            tdoc2 = time.time()
+            if tdoc1 != None:
+                print(' Completed in %ds.' %(tdoc2-tdoc1))
+            sys.stdout.write('Processing file %d/%d: "%s".' %(doc_ix,len(doc_list),doc))
+            sys.stdout.flush()
+            tdoc1 = time.time()
             if args.acoustic: # Don't batch by utt
                 printSome = False
-                if iteration < 10:
+                if iteration < train_noseg_iters:
                     nSamples = N_SAMPLES
                     pSegs = segs2pSegsWithForced(segs_init[doc], forced[doc], alpha = 0.05)
                 else:
@@ -1094,6 +1193,21 @@ if __name__ == "__main__":
                                     print("Score", scores[doc][smp][utt], "del", deleted[utt])
                         print()
 
+                
+            model.save(logdir + 'model.h5')
+            segmenter.save(logdir + 'segmenter.h5')
+            with open(logdir + 'checkpoint.obj', 'wb') as f:
+                obj = {'iteration': iteration,
+                       'pretrain': False,
+                       'random_doc_list': random_doc_list[doc_ix+1:],
+                       'doc_ix': doc_ix}
+                pickle.dump(obj, f)
+
+            doc_ix += 1
+
+        tdoc2 = time.time()
+        print(' Completed in %ds.' %(tdoc2-tdoc1))
+
         t1 = time.time()
         print("Iteration total time: %ds" %(t1-t0))
         print("Loss:", epochLoss)
@@ -1113,5 +1227,6 @@ if __name__ == "__main__":
             else:
                 writeSolutions(logdir, model, segmenter,
                                allBestSegs, text, iteration)
+        iteration += 1
 
     print("Logs in", logdir)
