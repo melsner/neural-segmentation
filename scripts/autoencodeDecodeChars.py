@@ -405,14 +405,16 @@ def getSegScore(text, allBestSeg, intervals=None, acoustic=False, out_file=None)
 
 def writeLog(iteration, epochLoss, epochDel, text, allBestSeg, logdir, intervals=None, acoustic=False, print_headers=False):
     if acoustic:
-        print('Training loss:', file=logfile)
-        print("\t".join(["%g" % xx for xx in [
-                        iteration, epochLoss, epochDel]]), file=logfile)
         scores = getSegScore(text,allBestSeg,intervals,acoustic=True)
         for doc in scores:
             if scores[doc] != None and not doc == '##overall##':
                 _, (bp,br,bf), _, (swp,swr,swf) = scores[doc]
                 with open(logdir+doc+'_log.txt', 'wb') as f:
+                    if print_headers:
+                        print("\t".join([
+                                        "iteration", "epochLoss", "epochDel", 
+                                        "bp", "br", "bf", "swp", "swr", "swf"]),
+                                        file=f)
                     print("\t".join(["%g" % xx for xx in [
                                     iteration, epochLoss, epochDel, bp, br, bf, swp, swr, swf,]]),
                                     file=f)
@@ -422,7 +424,7 @@ def writeLog(iteration, epochLoss, epochDel, text, allBestSeg, logdir, intervals
                 print("\t".join([
                                 "iteration", "epochLoss", "epochDel", 
                                 "bp", "br", "bf", "swp", "swr", "swf"]),
-                                file=logfile)
+                                file=f)
             print("\t".join(["%g" % xx for xx in [
                             iteration, epochLoss, epochDel, bp, br, bf, swp, swr, swf,]]),
                             file=f)
@@ -920,11 +922,13 @@ if __name__ == "__main__":
         pretrain = obj['pretrain']
         random_doc_list = obj['random_doc_list']
         doc_ix = obj['doc_ix']
+        allBestSegs = obj['allBestSegs']
         reshuffle_doc_list=False
     else:
         print('No training checkpoint found. Starting training from beginning.')
         iteration = 0
         pretrain = True
+        allBestSegs = None
         reshuffle_doc_list=True
 
     print()
@@ -970,11 +974,13 @@ if __name__ == "__main__":
             print("Actual deleted chars from document %s:" %doc, deletedChars[doc].sum())
             model.fit(X_train[doc], y_train, batch_size=BATCH_SIZE, nb_epoch=1)
 
+            doc_ix += 1
+            
             model.save(logdir + 'model.h5')
             with open(logdir + 'checkpoint.obj', 'wb') as f:
                 obj = {'iteration': iteration,
                        'pretrain': True,
-                       'random_doc_list': random_doc_list[doc_ix+1:],
+                       'random_doc_list': random_doc_list,
                        'doc_ix': doc_ix}
                 pickle.dump(obj, f)
 
@@ -997,7 +1003,6 @@ if __name__ == "__main__":
                         print(guess, end=" ")
                     print("\n")
 
-            doc_ix += 1
 
         iteration += 1
         reshuffle_doc_list=True
@@ -1005,12 +1010,13 @@ if __name__ == "__main__":
             pretrain = False
             iteration = 0
 
-    allBestSegs = dict.fromkeys(doc_list)
-    for doc in doc_list:
-        if args.acoustic:
-            allBestSegs[doc] = np.zeros(segs_init[doc].shape)
-        else:
-            allBestSegs[doc] = np.zeros((X_train[doc].shape[0], maxchar))
+    if allBestSegs == None:
+        allBestSegs = dict.fromkeys(doc_list)
+        for doc in doc_list:
+            if args.acoustic:
+                allBestSegs[doc] = np.zeros(segs_init[doc].shape)
+            else:
+                allBestSegs[doc] = np.zeros((X_train[doc].shape[0], maxchar))
     if args.acoustic:
         segs = segs_init
         XC = mfccs
@@ -1019,7 +1025,6 @@ if __name__ == "__main__":
     print()
 
     print('Co-training autoencoder and segmenter...')
-    iteration = 0
     while iteration < train_tot_iters:
         t0 = time.time()
         print()
@@ -1222,17 +1227,18 @@ if __name__ == "__main__":
                                     print("Score", scores[doc][smp][utt], "del", deleted[utt])
                         print()
 
+            doc_ix += 1
                 
             model.save(logdir + 'model.h5')
             segmenter.save(logdir + 'segmenter.h5')
             with open(logdir + 'checkpoint.obj', 'wb') as f:
                 obj = {'iteration': iteration,
                        'pretrain': False,
-                       'random_doc_list': random_doc_list[doc_ix+1:],
-                       'doc_ix': doc_ix}
+                       'random_doc_list': random_doc_list,
+                       'doc_ix': doc_ix,
+                       'allBestSegs': allBestSegs}
                 pickle.dump(obj, f)
 
-            doc_ix += 1
 
         tdoc2 = time.time()
         if tdoc1 != None:
@@ -1257,6 +1263,7 @@ if __name__ == "__main__":
             else:
                 writeSolutions(logdir, model, segmenter,
                                allBestSegs, text, iteration)
+        doc_ix = 0
         iteration += 1
 
     print("Logs in", logdir)
