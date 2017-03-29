@@ -1102,7 +1102,6 @@ if __name__ == "__main__":
                 for sample in range(nSamples):
                     segs = sampleFrameSegs(pSegs)
                     X,deletedChars = splitMFCCs(XC[doc], segs, maxutt, maxlen, maxchar, FRAME_SIZE)
-                    print(X[:,:,:10,:])
                     if reverseUtt:
                         y = X[:, ::-1, :]
                     else:
