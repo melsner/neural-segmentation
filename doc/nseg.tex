@@ -1,0 +1,357 @@
+%\title{emnlp 2017 instructions}
+% File emnlp2017.tex
+%
+
+\documentclass[11pt,letterpaper]{article}
+\usepackage{emnlp2017}
+\usepackage{times}
+\usepackage{latexsym}
+
+% Uncomment this line for the final submission:
+%\emnlpfinalcopy
+
+%  Enter the EMNLP Paper ID here:
+\def\emnlppaperid{***}
+
+% To expand the titlebox for more authors, uncomment
+% below and set accordingly.
+% \addtolength\titlebox{.5in}    
+
+\newcommand\BibTeX{B{\sc ib}\TeX}
+
+\newcommand{\xxx}[1]{\textbf{\color{red}XXX: #1}}
+
+\title{Title goes here}
+
+% Author information can be set in various styles:
+% For several authors from the same institution:
+\author{Author 1 \and ... \and Author n \\
+        Address line \\ ... \\ Address line}
+% if the names do not fit well on one line use
+%         Author 1 \\ {\bf Author 2} \\ ... \\ {\bf Author n} \\
+% For authors from different institutions:
+% \author{Author 1 \\ Address line \\  ... \\ Address line
+%         \And  ... \And
+%         Author n \\ Address line \\ ... \\ Address line}
+% To start a seperate ``row'' of authors use \AND, as in
+% \author{Author 1 \\ Address line \\  ... \\ Address line
+%         \AND
+%         Author 2 \\ Address line \\ ... \\ Address line \And
+%         Author 3 \\ Address line \\ ... \\ Address line}
+% If the title and author information does not fit in the area allocated,
+% place \setlength\titlebox{<new height>} right after
+% at the top, where <new height> can be something larger than 2.25in
+
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Abstract is required.
+\end{abstract}
+
+
+\section{Introduction}
+
+This paper describes a new cognitive model of the acquisition of
+word-like units from unsegmented input. The model is intended to
+describe the process by which pre-linguistic infants learn their
+earliest words, a stage they pass through during the first year of
+life \cite{Jusczyk}. Our model is based on the standard memory model
+of \newcite{Baddeley} in which the listener encodes lexical items into
+phonological working memory, but represents the entire sentence as a
+higher-level syntactic structure without phonological detail. Our
+model implements this architecture using encoder-decoder LSTMs with
+limited memory capacity, then searches for word segmentations which
+make it easy to remember the sentence.
+
+Word learning has been extensively studied in previous research, both
+with transcribed symbolic input and acoustics. Why attempt yet another
+approach? Our model has three main advantages. First, as a cognitive
+model, it relates the kinds of learning biases used in previous work
+to the wider literature on working memory. Second, its
+sequence-to-sequence neural architecture allows it to handle either
+one-hot symbolic input or dense vectors of acoustic features. In
+contrast, existing models are typically designed for ``clean''
+symbolic input, then retrofitted with additional mechanisms to cope
+with acoustics. Finally, neural networks have been impressively
+successful in supervised language processing domains, yet are still
+underused in unsupervised learning. Even systems which do use neural
+nets to model lexical acquisition generally require an auxiliary model
+for clustering the embeddings, which can make their learning
+objectives difficult to understand. Our system uses the
+well-understood autoencoder objective to perform the segmentation task
+without requiring auxiliary clustering, and thus suggests a new
+direction for neural unsupervised learning.
+
+\xxx{SAY SOMETHING ABOUT OUR RESULTS}
+
+\section{Motivations}
+
+We begin with a short overview of previous approaches to the word
+learning problem, then explain each of our main contributions in
+detail. Many cognitive models of the word learning problem draw on
+\newcite{Brent}, which used a simple unigram model of the lexicon to
+discover repeated patterns in phonemically transcribed input. Brent's
+model laid the groundwork for later generative models with more
+sophisticated prior distributions over word frequencies, co-occurrence
+statistics and phonological shapes \cite{xxx}. Other modeling
+architectures for segmentation have focused on detecting phonological
+boundaries between words using transitional probabilities \cite{xxx}
+or inducing words procedurally by ``subtracting'' known word forms
+from utterances \cite{Lignos}.
+
+All these modeling architectures are designed to work with
+phonemically transcribed input, and require some degree of
+retrofitting to work with more realistic inputs. In the Bayesian
+framework, this typically takes the form of a transducer which
+probabilistically transforms ``underlying'' lexical items to
+``surface'' acoustics \cite{Lee15} or discrete symbols
+\cite{Elsner13}; the same framework is used for morphological
+segmentation in \newcite{Cotterell16}. For transition-based models,
+the input must be transformed into discrete symbols from which
+segment-to-segment probabilities can be extracted; this transformation
+requires an externally trained preprocessor (a phone
+recognizer). Transition-based models are fairly robust to variation in
+the symbols \cite{Rytting,Daland,Fleck} and can be relatively
+successful in this framework. Extensions using neural nets
+\cite{Christiansen,Rytting} are discussed in more detail below
+(subsec. \ref{sub-neural}. \newcite{Lignos} requires the most complex
+preprocessing of the input (segmentation into syllables, with marked
+lexical stresses); adapting it to noisy input is an open problem.
+
+\subsection{Working memory and learning biases}
+
+Bayesian models of word segmentation rely on two kinds of learning
+biases to structure their inferred lexicons: predictability within
+words (the prior over phonological forms), and Zipfian predictable
+unigram and bigram frequencies between words (the prior over word
+distributions). These biases control the entropy of utterances, making
+it easy for adult listeners to remember what they hear and reconstruct
+any missing parts from context \cite{xxx}. In particular, a standard
+model of working memory \cite{Baddeley} proposes that listeners store
+the past \xxx{few seconds} of the utterance in a \textit{phonological
+  loop}, from which words are transferred into \xxx{what}.
+
+Evidence for this viewpoint comes from experiments in which
+\xxx{what}.
+
+\newcite{Baddeley} argues that the phonological loop functions in word
+\textit{learning} as well as processing by proficient listeners,
+aiding in the acquisition of unfamiliar words. In particular,
+\xxx{what} correlates with \xxx{what} in typical infants
+\cite{xxx}. \xxx{something about clinical populations}. This account
+of word learning is one of a growing number which attempt to unify
+acquisition and adult processing \cite{mcmurray}.
+
+In our model, memorization itself can be viewed as the objective for
+early word learning. The model attempts to reconstruct its input from
+memory; chunks that are easy to reconstruct (and that make the context
+reconstructible) are good candidate words. The working memory model
+accounts for the two types of bias normally found in Bayesian
+segmenters. Phonological predictability due to consistent stress
+\cite{Boerschinger} and segmental patterns \cite{Goldwater} reduces
+the load on the phonological loop.  Predictability between words
+reduces the load on syntactic memory. The two memory systems draw on
+different cognitive resources, which correspond to different
+parameters of the model.
+
+\subsection{Input representations}
+\label{sub-representations}
+
+As stated above, traditional segmentation models operate on phonemic
+transcriptions and must be adapted to cope with phonetic or acoustic
+input. For models which infer an explicit lexicon (i.e., those which
+do simply count segment transitions), this takes the form of a mapping
+between the data and the space of ``underlying'' latent word
+forms.
+
+Learning such a mapping can be problematic. Traditional generative
+learning models use parametric distributions over the data--- for
+acoustics, Gaussians \cite{Feldman,Elsner} or Gaussian-HMMs
+\cite{Lee}. But these are a notoriously poor fit to real speech sounds
+\cite{Glass?}.
+
+Latent underlying representations can also cause search problems,
+since the model must explore all the possible underlying forms which
+might map to some utterance on the surface. In a probabilistic system
+capable of mapping every word to every possible realization, this
+quickly becomes intractable. Many systems use dynamic programming
+\cite{Mochihashi,Neubig} with pruning \cite{vanGael}. But these
+algorithms require Markov models with small context windows, and in
+any case can still be slow and prone to search errors.
+
+Neural nets, on the other hand, learn a non-linear mapping between
+input and output. This allows them to model speech more flexibly,
+outcompeting Gaussian/HMMs for supervised speech recognition
+\cite{xxx}. Recurrent neural nets also produce hidden representations
+differently than HMMs. Rather than use dynamic programming to search a
+latent space, they produce a single vector deterministically at each
+timestep. Models such as LSTMs \cite{Schmidhuber} can learn
+long-distance sequential dependencies in their input without making
+inference more expensive.
+
+\subsection{Neural unsupervised learning}
+\label{sub-representations}
+
+A few previous papers have used neural networks for word
+segmentation. \newcite{Christiansen}, drawing on older work with
+Simple Recurrent Networks \cite{Elman90}, trains recurrent network as
+a language model. Word boundaries are extracted at points where the
+network predicts an upcoming utterance boundary; that is, utterance
+boundaries are used as distant supervision for the locations of word
+boundaries. While effective, this system uses symbolic rather than
+acoustic input. Moreover, it may have trouble with word endings which
+do not end utterances, such as the endings of function words;
+experiments show that infants do learn to recognize function words
+\cite{xxx} and use known words as ``anchors'' for segmentation within
+utterances \cite{Bortfeld}.
+
+\newcite{Rytting} adapts the Christiansen model to variable input by
+using the posterior probability distribution from a phone recognizer
+as its feature representation. This system was run on natural data;
+results for word boundary detection were significantly above chance,
+though still much less accurate than results for symbolic input. The
+use of utterance boundaries as distant supervision may create problems
+for this system similar to those pointed out for Christiansen
+above. Moreover, the use of an SRN rather than an LSTM means that the
+system is essentially phonotatic; it makes its decisions based on the
+previous one or two phones, without the capacity to remember whole
+lexical items.
+
+Recent work \cite{Kamper} has attempted to harness the flexibility of
+neural feature extractors within the generative model framework. This
+models has a hybrid architecture which alternates between clustering
+the embedding vectors using Bayesian mixture-of-Gaussians and
+reoptimizing the neural feature extraction. The advantage of this
+approach is its ability to exploit the known strengths of both
+Bayesian and neural learning systems. The disadvantage is its
+indirectness: there is no end-to-end objective to be optimized, and
+the system cannot take advantage of the neural net's ability to model
+dependencies between adjacent words, only within a word.
+
+Even outside the domain of word learning, neural networks have been
+most successful for supervised problems, and are not widely used for
+unsupervised learning of discrete structures (trees, clusters, segment
+boundaries). While some researchers have proposed
+information-theoretic objectives for learning clusters \cite{xxx}, the
+most widely used unsupervised objective is the one used here:
+autoencoding. Yet deriving discrete structures from an autoencoder has
+proven difficult \cite{has-anyone-done-it}.
+
+\newcite{Chung} describe a model similar to our own which performs a
+segmentation task using autoencoders. Both models use multiscale
+autoencoding to learn a sequence model with unknown segment
+boundaries. The main difference is the different technique used to
+deal with the discontinuities caused by switching discrete segment
+boundary variables. However, they evaluate their model on downstream
+tasks (notably, character language modeling) without evaluating the
+segmentations directly.
+
+\section{The Model}
+
+The model uses a basic encoder-decoder architecture now typical in
+machine translation \cite{xxx} and image captioning \cite{xxx}. In a
+typical encoder-decoder, the input is fed into an LSTM sequence model
+\cite{Schmidhuber} which represents it as a latent numeric
+embedding. This embedding is then fed into another sequence model,
+which uses it to generate an output sequence. Our two-level model
+performs this process in stages, first encoding every word,
+character-by-character, and then encoding the word sequence,
+vector-by-vector. In an autoencoder, the objective is to make input
+and output match; thus, the decoder performs the encoding stages in
+reverse. We provide the final encoder hidden state as input to each
+decoder unit \cite{xxx}. To force the system's learned embeddings to
+be robust to noise caused by mishearing or misremembering, we use
+dropout \cite{xxx} at the input (deleting individual timesteps) and at
+the word encoding layer (deleting entire words). This architecture is
+illustrated in Figure \ref{fig-arch}.
+
+The encoder-decoder does not predict segment boundaries on its own,
+but gives an objective function (reconstruction loss) which can be
+used to guide segmentation. \xxx{technique due to Mnih?} In our
+system, this technique works as follows: we begin with a proposal
+distribution $P_{seg}$ over sequences of segment boundaries for the
+current utterance. We sample $m$ sequences of boundaries, $B_{1:m}$
+from $P_{seg}$. Each boundary sequence splits the utterance into
+words. We use the autoencoder network to encode and decode the words,
+and obtain the loss (the cross-entropy of the reconstructed input) for
+each one, $L_{1:m}$.
+
+We then treat each breakpoint in the utterance independently: for each
+one, we use the losses and the proposal probabilities to compute
+importance weights, then compute the expected probability of a
+boundary at that position by summing over the weighted
+samples. \xxx{show equations?  did I even do it right?} Essentially,
+a breakpoint will be more likely if it appeared in samples
+with low reconstruction loss, especially if it is not encouraged by
+the current proposal.
+
+We initialize by making random breakpoint proposals (with probability
+$.1$ at each position). The random proposal does not search the space
+of segmentation boundaries particularly efficiently, so we train a
+better proposal using another LSTM. This LSTM simply reads the input
+from left to right and predicts a binary output (segment or not) at
+each timestep. We update the proposal LSTM by using the
+sampling-derived $P_{seg}$ as a training target after each
+batch. Thus, the proposal learns to predict segment boundaries that
+are likely to result in low reconstruction loss for the main
+network. To force the system to explore the space, we smooth the
+learned proposal by interpolating it with a uniform distribution:
+$P_{seg} = .9 \times P_{LSTM} + .1 \times \frac{1}{2}$.
+
+We control the memory capacity of the system using four tunable
+parameters: the number of hidden states at the phonological level
+($H_p$) and at the utterance level ($H_u$) and the dropout probability
+of mishearing a phonological segment ($D_p$) or a word ($D_u$). We
+discuss parameter tuning results below.
+
+The system also has several other parameters which were not tuned
+against the evaluation metric. For convenience in GPU training, we
+treat all sequences as fixed length, either clipping them or padding
+with a dummy symbol. This requires us to set a maximum length for each
+word (in characters), and each utterance (in words and characters); we
+set these parameters to ensure 99\% coverage of the input (for the
+Brent corpus, 7, 10, and 30 respectively).
+
+Clipping creates the possibility of pathological outcomes where the
+system deliberately creates extremely long words, exploiting the fact
+that the excess characters will be discarded and will not have to be
+predicted in the output. We penalize this by subtracting 50 for each
+deleted character. Finally, we find that, despite pre-training of the
+phonological encodings, the system may settle into an initial state
+where the phonological network simply embeds the characters and the
+utterance network learns a character LM. To avoid this, we substract
+10 from the objective for each one-symbol word. These parameters were
+tuned only lightly; we increased the values until the problematic
+behavior ceased.
+
+We implemented the network in Keras \cite{xxx}, using Adam \cite{xxx}
+with default settings for optimization. We use mini-batches of 128 and
+take 100 samples of potential segment boundaries per sequence. We
+perform 10 iterations of pretraining with random boundaries, 10
+iterations of boundary induction with random proposals, and 70
+iterations of full training with the learned LSTM proposal.
+
+Learning curves for segmentation on the Brent corpus are shown in
+Figure \ref{fig-learning-curve}. The first 10 iterations show a
+gradual increase in segmentation performance using the random
+proposal. Performance increases sharply with the activation of
+the learned proposal, then climbs slowly over time. \xxx{prec vs recall}
+
+\section{Results}
+
+\subsection{Brent Corpus}
+
+\section{Conclusions}
+
+\section*{Acknowledgments}
+
+Do not number the acknowledgment section.
+
+\bibliography{emnlp2017}
+\bibliographystyle{emnlp_natbib}
+
+\end{document}
