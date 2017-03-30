@@ -660,19 +660,16 @@ def printTimeSeg(seg, out_file=sys.stdout, docname=None, TextGrid=False):
             else:
                 print('%s %s' %i, file=out_file)
 
-def printTimeSegs(segs, out_file=sys.stdout, TextGrid=False):
+def printTimeSegs(segs, out_file='./', TextGrid=False):
+    assert type(out_file) == str, 'out_file must be a directory path.'
+    out_path = out_file
     if TextGrid:
-        assert type(out_file) == str, 'out_file must be a directory path in TextGrid mode.'
-        out_path = out_file
-        for doc in segs:
-            with open(out_path + doc + '.TextGrid', 'wb') as f:
-                printTimeSeg(segs[doc], out_file=f, docname=doc, TextGrid=TextGrid)
+        suffix = '.TextGrid'
     else:
-        if type(out_file) == str:
-            out_file = file(out_file)
-        for doc in segs:
-            printTimeSeg(segs[doc], out_file, doc)
-        out_file.close()
+        suffix = '_seg.txt'
+    for doc in segs:
+        with open(out_path + doc + suffix, 'wb') as f:
+            printTimeSeg(segs[doc], out_file=f, docname=doc, TextGrid=TextGrid)
 
 def reconstructFullMFCCs(speech_in, nonspeech_in):
     speech = copy.deepcopy(speech_in)
@@ -1114,6 +1111,7 @@ if __name__ == "__main__":
                 epochDel += deleted.sum()
                 epochOneL += oneLetter.sum()
 
+                printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir, TextGrid=False) 
                 printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir, TextGrid=True) 
 
             else:
@@ -1276,8 +1274,7 @@ if __name__ == "__main__":
 
         if iteration % 10 == 0:
             if args.acoustic:
-                if args.segout:
-                    printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=args.segout) 
+                printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir) 
             else:
                 writeSolutions(logdir, model, segmenter,
                                allBestSegs, text, iteration)
