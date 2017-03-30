@@ -1,5 +1,5 @@
-from __future__ import division
-import sys, numpy as np
+from __future__ import print_function, division
+import sys, numpy as np, time
 
 def precision_recall(n_matched, n_gold, n_proposed):
     """Calculates the classification precision and recall, given
@@ -66,10 +66,10 @@ def scoreBreaks(surface, found):
 
         if cat1 != cat2:
             if not warned:
-                print "Warning: surface string mismatch:", cat1, cat2
+                print("Warning: surface string mismatch:", cat1, cat2)
                 warned = 1
             elif warned == 1:
-                print "Warning: more mismatches"
+                print("Warning: more mismatches")
                 warned += 1
             #sys.exit(1)
 
@@ -323,3 +323,57 @@ def scoreLexicon(underlying, found):
     # print actual, "true words", proposed, "found words", matched, "matched"
 
     return precision_recall_f(matched, actual, proposed)
+
+def getSegScore(text, allBestSeg, acoustic=False, out_file=None):
+    scores = dict.fromkeys(allBestSeg.keys())
+    if not out_file:
+        out_file = sys.stdout
+    bm_tot = ba_tot = bP_tot = swm_tot = swa_tot = swP_tot = 0
+    for doc in sorted(allBestSeg.keys()):
+        if doc in text:
+            if acoustic:
+                (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = scoreFrameSegs(text[doc], allBestSeg[doc])
+                scores[doc] = [(bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf)]
+                bm_tot, ba_tot, bP_tot = bm_tot+bm, ba_tot+ba, bP_tot+bP
+                swm_tot, swa_tot, swP_tot = swm_tot+swm, swa_tot+swa, swP_tot+swP
+            else:
+                segmented = matToSegs(allBestSeg[doc], text)
+                #print(segmented)
+                #print(text)
+
+                (bp,br,bf) = scoreBreaks(text, segmented)
+                (swp,swr,swf) = scoreWords(text, segmented)
+                (lp,lr,lf) = scoreLexicon(text, segmented)
+        else:
+            print('Warning: Document ID "%s" in training data but not in gold. Skipping evaluation for this file.' %doc,file=out_file)
+    if acoustic:
+        bp,br,bf = precision_recall_f(bm_tot,ba_tot,bP_tot)
+        swp,swr,swf = precision_recall_f(swm_tot,swa_tot,swP_tot)
+        scores['##overall##'] = (bm_tot,ba_tot,bP_tot), (bp,br,bf), (swm_tot,swa_tot,swP_tot), (swp,swr,swf)
+    return scores
+
+def printSegScore(scores, acoustic=False, by_document=True, out_file=None):
+    t0 = time.time()
+    print('Per-document scores:', file=out_file)
+    for doc in sorted(scores.keys()):
+        if scores[doc] != None and doc != '##overall##':
+            if acoustic:
+                (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = scores[doc]
+                print('Score for document "%s":' %doc, file=out_file)
+                print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
+                print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
+            else:
+                (bp,br,bf), (swp,swr,swf), (lp,lr,lf) = scores[doc] 
+                print('Score for document "%s":' %doc, file=out_file)
+                print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
+                print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
+                print("LP %4.2f LR %4.2f LF %4.2f" % (100 * lp, 100 * lr, 100 * lf), file=out_file)
+    if acoustic:
+        _, (bp,br,bf), _, (swp,swr,swf) = scores['##overall##']
+        print('Overall score:', file=out_file)
+        print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
+        print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
+    t1 = time.time()
+    print('Scoring took %d seconds.' %(t1-t0))
+
+

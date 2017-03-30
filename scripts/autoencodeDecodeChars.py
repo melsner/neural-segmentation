@@ -17,6 +17,7 @@ import time
 from collections import defaultdict
 from echo_words import CharacterTable, pad
 from capacityStatistics import getPseudowords
+from ae_io import *
 from score import *
 
 def uttsToCharVectors(text, maxchar, ctable):
@@ -351,64 +352,10 @@ def writeSolutions(logdir, model, segmenter, allBestSeg, text, iteration):
                   file=logfile)
     logfile.close()
 
-def printSegScore(text, allBestSeg, intervals=None, acoustic=False, by_document=True, out_file=None):
-    t0 = time.time()
-    scores = getSegScore(text, allBestSeg, intervals, acoustic)
-    print('Per-document scores:', file=out_file)
-    for doc in sorted(scores.keys()):
-        if scores[doc] != None and doc != '##overall##':
-            if acoustic:
-                (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = scores[doc]
-                print('Score for document "%s":' %doc, file=out_file)
-                print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
-                print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
-            else:
-                (bp,br,bf), (swp,swr,swf), (lp,lr,lf) = scores[doc] 
-                print('Score for document "%s":' %doc, file=out_file)
-                print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
-                print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
-                print("LP %4.2f LR %4.2f LF %4.2f" % (100 * lp, 100 * lr, 100 * lf), file=out_file)
-    if acoustic:
-        _, (bp,br,bf), _, (swp,swr,swf) = scores['##overall##']
-        print('Overall score:', file=out_file)
-        print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
-        print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
-    t1 = time.time()
-    print('Scoring took %d seconds.' %(t1-t0))
-
-def getSegScore(text, allBestSeg, intervals=None, acoustic=False, out_file=None):
-    scores = dict.fromkeys(allBestSeg.keys())
-    if not out_file:
-        out_file = sys.stdout
-    bm_tot = ba_tot = bP_tot = swm_tot = swa_tot = swP_tot = 0
-    for doc in sorted(allBestSeg.keys()):
-        if doc in text:
-            if acoustic:
-                assert intervals, 'Intervals object required for scoring in acoustic mode.'
-                segmented = frameSeg2timeSeg(intervals[doc],allBestSeg[doc])
-                (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = scoreFrameSegs(text[doc], segmented)
-                scores[doc] = [(bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf)]
-                bm_tot, ba_tot, bP_tot = bm_tot+bm, ba_tot+ba, bP_tot+bP
-                swm_tot, swa_tot, swP_tot = swm_tot+swm, swa_tot+swa, swP_tot+swP
-            else:
-                segmented = matToSegs(allBestSeg[doc], text)
-                #print(segmented)
-                #print(text)
-
-                (bp,br,bf) = scoreBreaks(text, segmented)
-                (swp,swr,swf) = scoreWords(text, segmented)
-                (lp,lr,lf) = scoreLexicon(text, segmented)
-        else:
-            print('Warning: Document ID "%s" in training data but not in gold. Skipping evaluation for this file.' %doc,file=out_file)
-    if acoustic:
-        bp,br,bf = precision_recall_f(bm_tot,ba_tot,bP_tot)
-        swp,swr,swf = precision_recall_f(swm_tot,swa_tot,swP_tot)
-        scores['##overall##'] = (bm_tot,ba_tot,bP_tot), (bp,br,bf), (swm_tot,swa_tot,swP_tot), (swp,swr,swf)
-    return scores
-
 def writeLog(iteration, epochLoss, epochDel, text, allBestSeg, logdir, intervals=None, acoustic=False, print_headers=False):
     if acoustic:
-        scores = getSegScore(text,allBestSeg,intervals,acoustic=True)
+        allBestSeg = frameSegs2timeSegs(intervals,allBestSeg)
+        scores = getSegScore(text,allBestSeg,acoustic=True)
         for doc in scores:
             if scores[doc] != None and not doc == '##overall##':
                 _, (bp,br,bf), _, (swp,swr,swf) = scores[doc]
@@ -489,20 +436,6 @@ def readText(path):
         charset = list(set("".join(chars)))
 
     return text, chars, charset
-
-def readGoldFrameSeg(path):
-    gold_seg = {}
-    with open(path, 'rb') as gold:
-        for line in gold:
-            if line.strip() != '':
-                doc, start, end = line.strip().split()[:3]
-                if doc in gold_seg:
-                    gold_seg[doc].append((float(start),float(end)))
-                else:
-                    gold_seg[doc] = [(float(start),float(end))]
-    for doc in gold_seg:
-        gold_seg[doc].sort(key=lambda x: x[0])
-    return gold_seg
 
 def readMFCCs(path, filter_file=None):
     basename = re.compile('.*/(.+)\.mfcc')
@@ -835,7 +768,7 @@ if __name__ == "__main__":
         ONE_LETTER_WT = 50
 
         print('Initial segmentation scores:')
-        printSegScore(text,segs_init,intervals,True)
+        printSegScore(getSegScore(text, frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
         print()
     else:
         text, uttChars, charset = readText(path)
@@ -1335,9 +1268,9 @@ if __name__ == "__main__":
         print("Deletions:", epochDel)
         print("One letter words:", epochOneL)
         if args.acoustic:
-            printSegScore(text, allBestSegs, intervals, acoustic=True)
+            printSegScore(getSegScore(text, frameSegs2timeSegs(intervals,allBestSegs), args.acoustic),True)
         else:
-            printSegScore(text, allBestSegs, acoustic=True)
+            printSegScore(getSegScore(text, allBestSegs, args.acoustic),True)
         writeLog(iteration, epochLoss, epochDel, 
                  text, allBestSegs, logdir, intervals, args.acoustic, print_headers=iteration==0)
 
