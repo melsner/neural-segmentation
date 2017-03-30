@@ -695,16 +695,51 @@ def frameSeg2timeSeg(intervals, seg_f):
 
     return seg_t
 
-def printTimeSeg(seg, docname=None):
-    for i in seg:
-        if docname:
-            print('%s %s %s' %(docname, i[0], i[1]))
-        else:
-            print('%s %s' %i)
+def printTimeSeg(seg, out_file=sys.stdout, docname=None, TextGrid=False):
+    if TextGrid:
+        print('File type = "ooTextFile"', file=out_file)
+        print('Object class = "TextGrid"', file=out_file)
+        print('', file=out_file)
+        print('xmin = %.3f' %seg[0][0], file=out_file)
+        print('xmax = %.3f' %seg[-1][1], file=out_file)
+        print('tiers? <exists>', file=out_file)
+        print('size = 1', file=out_file)
+        print('item []:', file=out_file)
+        print('    item [1]:', file=out_file)
+        print('        class = "IntervalTier"', file=out_file)
+        print('        class = "segmentations"', file=out_file)
+        print('        xmin = %.3f' %seg[0][0], file=out_file)
+        print('        xmax = %.3f' %seg[-1][1], file=out_file)
+        print('        intervals: size = %d' %len(seg), file=out_file)
+        i = 1
+        for s in seg:
+            print('        intervals [%d]:' %i, file=out_file)
+            print('            xmin = %.3f' %s[0], file=out_file)
+            print('            xmax = %.3f' %s[1], file=out_file)
+            print('            text = ""', file=out_file)
+            i += 1
+        print('', file=out_file)
 
-def printTimeSegs(segs):
-    for doc in segs:
-        printTimeSeg(segs[doc], doc)
+    else:
+        for i in seg:
+            if docname:
+                print('%s %s %s' %(docname, i[0], i[1]), file=out_file)
+            else:
+                print('%s %s' %i, file=out_file)
+
+def printTimeSegs(segs, out_file=sys.stdout, TextGrid=False):
+    if TextGrid:
+        assert type(out_file) == str, 'out_file must be a directory path in TextGrid mode.'
+        out_path = out_file
+        for doc in segs:
+            with open(out_path + doc + '.TextGrid', 'wb') as f:
+                printTimeSeg(segs[doc], out_file=f, docname=doc, TextGrid=TextGrid)
+    else:
+        if type(out_file) == str:
+            out_file = file(out_file)
+        for doc in segs:
+            printTimeSeg(segs[doc], out_file, doc)
+        out_file.close()
 
 def reconstructFullMFCCs(speech_in, nonspeech_in):
     speech = copy.deepcopy(speech_in)
@@ -828,7 +863,7 @@ if __name__ == "__main__":
     segHidden = int(args.segHidden) #100
     wordDropout = float(args.wordDropout) #.5
     charDropout = float(args.charDropout) #.5
-    pretrain_iters = 1
+    pretrain_iters = 10
     train_noseg_iters = 10
     train_tot_iters = 81
     RNN = recurrent.LSTM
@@ -1146,6 +1181,8 @@ if __name__ == "__main__":
                 epochDel += deleted.sum()
                 epochOneL += oneLetter.sum()
 
+                printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir, TextGrid=True) 
+
             else:
                 for batch, inds in enumerate(batchIndices(X_train[doc], BATCH_SIZE)):
                     printSome = False
@@ -1307,7 +1344,7 @@ if __name__ == "__main__":
         if iteration % 10 == 0:
             if args.acoustic:
                 if args.segout:
-                    printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), file=args.segout) 
+                    printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=args.segout) 
             else:
                 writeSolutions(logdir, model, segmenter,
                                allBestSegs, text, iteration)
@@ -1315,3 +1352,4 @@ if __name__ == "__main__":
         iteration += 1
 
     print("Logs in", logdir)
+
