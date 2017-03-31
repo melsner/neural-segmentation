@@ -1,5 +1,7 @@
+from __future__ import print_function, division
 import sys, argparse
 from score import *
+from ae_io import *
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument('gold')

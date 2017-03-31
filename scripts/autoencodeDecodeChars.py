@@ -71,12 +71,13 @@ def padFrameUtt(utt, maxutt, maxlen, FRAME_SIZE):
 
 def padFrameWord(word, maxlen, FRAME_SIZE):
     deleted = max(0, word.shape[0]-maxlen)
+    one_lett = int(word.shape[0] == 1)
     word = word[:maxlen,:]
     padChrs = np.zeros((max(0, maxlen-word.shape[0]),FRAME_SIZE))
     padChrs[:,-1] = 1.
     word = np.append(word, padChrs,0)
     assert word.shape == (maxlen,FRAME_SIZE), 'Word shape after padding should be %s, was actually %s.' %((maxlen,FRAME_SIZE), word.shape)
-    return word, deleted, int(word.shape[0] == 1)
+    return word, deleted, one_lett
 
 def inputSliceClosure(dim):
     return lambda xx: xx[:, dim, :, :]
@@ -763,6 +764,7 @@ if __name__ == "__main__":
         N_SAMPLES = 50
         DEL_WT = 50
         ONE_LETTER_WT = 50
+        SEG_PENALTY = 1
 
         print('Initial segmentation scores:')
         printSegScore(getSegScore(text, frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
@@ -1091,7 +1093,9 @@ if __name__ == "__main__":
                     #print(DEL_WT * deleted)
                     #print(ONE_LETTER_WT * deleted)
                     #print('')
-                    scores.append(np.sum(loss + DEL_WT * deleted + ONE_LETTER_WT)[None,...])
+                    scores.append(np.sum(loss + \
+                                         DEL_WT * deleted + \
+                                         SEG_PENALTY * segs.sum())[None,...])
                     segSamples.append(segs[None,...])
                 segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
                                                      metric=METRIC)
