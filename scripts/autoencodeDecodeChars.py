@@ -763,7 +763,7 @@ if __name__ == "__main__":
         maxchar = 400 # at most 4 seconds of speech per utterance
         N_SAMPLES = 50
         DEL_WT = 50
-        ONE_LETTER_WT = 50
+        ONE_LETTER_WT = 0
         SEG_PENALTY = 1
 
         print('Initial segmentation scores:')
@@ -1050,6 +1050,7 @@ if __name__ == "__main__":
         epochLoss = 0
         epochDel = 0
         epochOneL = 0
+        epochSeg = 0
 
         tdoc1 = None
         tdoc2 = None
@@ -1095,6 +1096,7 @@ if __name__ == "__main__":
                     #print('')
                     scores.append(np.sum(loss + \
                                          DEL_WT * deleted + \
+                                         ONE_LETTER_WT * oneLetter + \
                                          SEG_PENALTY * segs.sum())[None,...])
                     segSamples.append(segs[None,...])
                 segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
@@ -1114,6 +1116,7 @@ if __name__ == "__main__":
                 epochLoss += loss[0]
                 epochDel += deleted.sum()
                 epochOneL += oneLetter.sum()
+                epochSeg += allBestSegs[doc].sum()
 
                 printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir, TextGrid=False) 
                 printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir, TextGrid=True) 
@@ -1182,6 +1185,7 @@ if __name__ == "__main__":
                     epochLoss += loss[0]
                     epochDel += deleted.sum()
                     epochOneL += oneLetter.sum()
+                    epochSeg += allBestSegs[doc].sum()
 
                     # if batch % 25 == 0:
                     #     print("Loss:", loss)
@@ -1269,6 +1273,7 @@ if __name__ == "__main__":
         print("Loss:", epochLoss)
         print("Deletions:", epochDel)
         print("One letter words:", epochOneL)
+        print("Total segmentation points:", epochSeg)
         if args.acoustic:
             printSegScore(getSegScore(text, frameSegs2timeSegs(intervals,allBestSegs), args.acoustic),True)
         else:
