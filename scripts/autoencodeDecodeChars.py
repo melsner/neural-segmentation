@@ -743,6 +743,7 @@ if __name__ == "__main__":
     parser.add_argument("--segHidden", default=100)
     parser.add_argument("--wordDropout", default=.5)
     parser.add_argument("--charDropout", default=.5)
+    parser.add_argument("--batchSize", default=None)
     parser.add_argument("--logfile", default=None)
     parser.add_argument("--acoustic", action='store_true')
     parser.add_argument("--segfile", default=None)
@@ -764,6 +765,11 @@ if __name__ == "__main__":
 
     if args.acoustic:
         assert args.segfile and args.goldfile, 'Files containing initial and gold segmentations are required in acoustic mode.'
+        if not args.batchSize:
+            args.batchSize = 1000
+    else:
+        if not args.batchSize:
+            args.batchSize = 128
 
     path = args.data
     #pseudWeights = args.pseudWeights
@@ -789,10 +795,9 @@ if __name__ == "__main__":
         maxutt = 50   
         maxchar = 400 
         N_SAMPLES = 50
-        DEL_WT = 10
-        ONE_LETTER_WT = 10
+        DEL_WT = 50
+        ONE_LETTER_WT = 50
         SEG_PENALTY = 0
-        BATCH_SIZE = 1000 # NOTE: Batch size is in frames in acoustic mode (not utts)
 
         print('Initial segmentation scores:')
         printSegScore(getSegScore(text, frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
@@ -811,8 +816,7 @@ if __name__ == "__main__":
         maxchar = 30
         N_SAMPLES = 50
         DEL_WT = 50
-        ONE_LETTER_WT = 10
-        BATCH_SIZE = 128
+        ONE_LETTER_WT = 50
     
     t1 = time.time()
     print('Data loaded in %ds.' %(t1-t0))
@@ -824,6 +828,7 @@ if __name__ == "__main__":
     segHidden = int(args.segHidden) #100
     wordDropout = float(args.wordDropout) #.5
     charDropout = float(args.charDropout) #.5
+    BATCH_SIZE = args.batchSize
     pretrain_iters = 10
     train_noseg_iters = 10 
     train_tot_iters = 81
