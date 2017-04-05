@@ -3,7 +3,10 @@ import argparse
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 from keras.models import Model, Sequential, load_model
-from keras.engine.training import slice_X
+try:
+    from keras.engine.training import slice_X
+except:
+    from keras.engine.training import _slice_arrays as slice_X
 from keras.layers import Activation, TimeDistributed, Dense, RepeatVector, recurrent, Input, Reshape, Merge, merge, Lambda, Dropout
 from keras import backend as K
 import tensorflow as tf

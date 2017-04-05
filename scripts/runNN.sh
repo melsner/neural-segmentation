@@ -1,8 +1,8 @@
 #PBS -N autoencode_segment
-#PBS -l nodes=1:gpus=2
-#PBS -l walltime=120:00:00
+#PBS -l nodes=1:gpus=1
+#PBS -l walltime=48:00:00
 
-module load python/2.7.8
+module load python/2.7
 cd $PBS_O_WORKDIR
 source activate local
 

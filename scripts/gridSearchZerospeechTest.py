@@ -1,13 +1,13 @@
 import os
 
 if __name__ == "__main__":
-    preamble = file("runNN.sh").read()
+    preamble = file("scripts/runNN.sh").read()
 
-    for wSize in [20, 40]:
-        for uSize in [100, 400]:
+    for wSize in [40]:
+        for uSize in [400]:
             for sSize in [500, 1000, 1500]:
-                for wDrop in [0, .25]:
-                    for cDrop in [0, .25]:
+                for wDrop in [.25]:
+                    for cDrop in [.25]:
                         for maxLen in [50, 100]:
                             for maxChar in [250, 500]:
                                 for batchSize in [500,1000,5000]:

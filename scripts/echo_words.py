@@ -1,6 +1,9 @@
 from __future__ import print_function
 from keras.models import Sequential
-from keras.engine.training import slice_X
+try:
+    from keras.engine.training import slice_X
+except:
+    from keras.engine.training import _slice_arrays as slice_X
 from keras.layers import Activation, TimeDistributed, Dense, RepeatVector, recurrent, Dropout
 import numpy as np
 import random
