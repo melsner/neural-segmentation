@@ -746,6 +746,9 @@ if __name__ == "__main__":
     parser.add_argument("--segHidden", default=100)
     parser.add_argument("--wordDropout", default=.5)
     parser.add_argument("--charDropout", default=.5)
+    parser.add_argument("--maxChar", default=None)
+    parser.add_argument("--maxLen", default=None)
+    parser.add_argument("--maxUtt", default=None)
     parser.add_argument("--batchSize", default=None)
     parser.add_argument("--logfile", default=None)
     parser.add_argument("--acoustic", action='store_true')
@@ -770,9 +773,21 @@ if __name__ == "__main__":
         assert args.segfile and args.goldfile, 'Files containing initial and gold segmentations are required in acoustic mode.'
         if not args.batchSize:
             args.batchSize = 1000
+        if not args.maxLen:
+            args.maxLen = 100
+        if not args.maxUtt:
+            args.maxUtt = 50
+        if not args.maxChar:
+            args.maxChar = 400
     else:
         if not args.batchSize:
             args.batchSize = 128
+        if not args.maxLen:
+            args.maxLen = 7
+        if not args.maxUtt:
+            args.maxUtt = 10
+        if not args.maxChar:
+            args.maxChar = 30
 
     path = args.data
     #pseudWeights = args.pseudWeights
@@ -794,9 +809,6 @@ if __name__ == "__main__":
         mfccs, FRAME_SIZE = readMFCCs(path)
         mfccs = filterMFCCs(mfccs, intervals, segs_init, FRAME_SIZE)
         doc_list = sorted(list(mfccs.keys()))
-        maxlen = 100  
-        maxutt = 50   
-        maxchar = 400 
         N_SAMPLES = 50
         DEL_WT = 50
         ONE_LETTER_WT = 50
@@ -814,9 +826,6 @@ if __name__ == "__main__":
         ## TODO: Change symbolic mode to allow multiple input files
         ## like acoustic mode currently does
         doc_list = ['main']
-        maxlen = 7
-        maxutt = 10
-        maxchar = 30
         N_SAMPLES = 50
         DEL_WT = 50
         ONE_LETTER_WT = 50
@@ -831,7 +840,10 @@ if __name__ == "__main__":
     segHidden = int(args.segHidden) #100
     wordDropout = float(args.wordDropout) #.5
     charDropout = float(args.charDropout) #.5
-    BATCH_SIZE = args.batchSize
+    maxlen = int(args.maxLen)
+    maxutt = int(args.maxUtt)
+    maxchar = int(args.maxChar)
+    BATCH_SIZE = int(args.batchSize)
     pretrain_iters = 10
     train_noseg_iters = 10 
     train_tot_iters = 81

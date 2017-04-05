@@ -18,4 +18,5 @@ if __name__ == "__main__":
                                     outf = file("batch/run%s.sh" % rName, "w")
                                     print >>outf, preamble + "\n" + cmd
                                     outf.close()
+                                    os.system("qsub batch/run%s.sh" %rName)
                                     
