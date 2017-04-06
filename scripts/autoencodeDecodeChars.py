@@ -3,7 +3,10 @@ import argparse
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 from keras.models import Model, Sequential, load_model
-from keras.engine.training import slice_X
+try:
+    from keras.engine.training import slice_X
+except:
+    from keras.engine.training import _slice_arrays as slice_X
 from keras.layers import Activation, TimeDistributed, Dense, RepeatVector, recurrent, Input, Reshape, Merge, merge, Lambda, Dropout
 from keras import backend as K
 import tensorflow as tf
@@ -743,6 +746,10 @@ if __name__ == "__main__":
     parser.add_argument("--segHidden", default=100)
     parser.add_argument("--wordDropout", default=.5)
     parser.add_argument("--charDropout", default=.5)
+    parser.add_argument("--maxChar", default=None)
+    parser.add_argument("--maxLen", default=None)
+    parser.add_argument("--maxUtt", default=None)
+    parser.add_argument("--batchSize", default=None)
     parser.add_argument("--logfile", default=None)
     parser.add_argument("--acoustic", action='store_true')
     parser.add_argument("--segfile", default=None)
@@ -764,6 +771,23 @@ if __name__ == "__main__":
 
     if args.acoustic:
         assert args.segfile and args.goldfile, 'Files containing initial and gold segmentations are required in acoustic mode.'
+        if not args.batchSize:
+            args.batchSize = 1000
+        if not args.maxLen:
+            args.maxLen = 100
+        if not args.maxUtt:
+            args.maxUtt = 50
+        if not args.maxChar:
+            args.maxChar = 400
+    else:
+        if not args.batchSize:
+            args.batchSize = 128
+        if not args.maxLen:
+            args.maxLen = 7
+        if not args.maxUtt:
+            args.maxUtt = 10
+        if not args.maxChar:
+            args.maxChar = 30
 
     path = args.data
     #pseudWeights = args.pseudWeights
@@ -785,14 +809,10 @@ if __name__ == "__main__":
         mfccs, FRAME_SIZE = readMFCCs(path)
         mfccs = filterMFCCs(mfccs, intervals, segs_init, FRAME_SIZE)
         doc_list = sorted(list(mfccs.keys()))
-        maxlen = 100  
-        maxutt = 50   
-        maxchar = 400 
         N_SAMPLES = 50
-        DEL_WT = 10
-        ONE_LETTER_WT = 10
+        DEL_WT = 50
+        ONE_LETTER_WT = 50
         SEG_PENALTY = 0
-        BATCH_SIZE = 1000 # NOTE: Batch size is in frames in acoustic mode (not utts)
 
         print('Initial segmentation scores:')
         printSegScore(getSegScore(text, frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
@@ -806,13 +826,9 @@ if __name__ == "__main__":
         ## TODO: Change symbolic mode to allow multiple input files
         ## like acoustic mode currently does
         doc_list = ['main']
-        maxlen = 7
-        maxutt = 10
-        maxchar = 30
         N_SAMPLES = 50
         DEL_WT = 50
-        ONE_LETTER_WT = 10
-        BATCH_SIZE = 128
+        ONE_LETTER_WT = 50
     
     t1 = time.time()
     print('Data loaded in %ds.' %(t1-t0))
@@ -824,6 +840,10 @@ if __name__ == "__main__":
     segHidden = int(args.segHidden) #100
     wordDropout = float(args.wordDropout) #.5
     charDropout = float(args.charDropout) #.5
+    maxlen = int(args.maxLen)
+    maxutt = int(args.maxUtt)
+    maxchar = int(args.maxChar)
+    BATCH_SIZE = int(args.batchSize)
     pretrain_iters = 10
     train_noseg_iters = 10 
     train_tot_iters = 81
@@ -1167,10 +1187,10 @@ if __name__ == "__main__":
                     print('    Updating models.')
                     loss = model.train_on_batch(X, y)
                     segmenter.train_on_batch(np.expand_dims(batch_in,0), np.expand_dims(segProbs, 2))
-                    segmenter_out = np.squeeze(segmenter.predict(np.expand_dims(batch_in,0), verbose=0))
-                    print("      First 10 segProbs:", segProbs[0,:10])
-                    print("      First 10 bestSegs:", bestSegs[0,:10])
-                    print("      First 10 segmenter probs:", segmenter_out[:10])
+                    #segmenter_out = np.squeeze(segmenter.predict(np.expand_dims(batch_in,0), verbose=0))
+                    #print("      First 10 segProbs:", segProbs[0,:10])
+                    #print("      First 10 bestSegs:", bestSegs[0,:10])
+                    #print("      First 10 segmenter probs:", segmenter_out[:10])
                     epochLoss += loss[0]
                     epochDel += deleted.sum()
                     epochOneL += oneLetter.sum()
