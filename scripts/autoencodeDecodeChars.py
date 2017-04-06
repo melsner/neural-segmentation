@@ -224,6 +224,14 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
         eScores = np.exp(scores - MM)
         #approximately the probability of the sample given the data
         pSeg = eScores / eScores.sum(axis=0, keepdims=True)
+        utt_selector = np.arange(pSeg.shape[0])
+        best = np.argmax(pSeg, axis=1)
+        segs = np.array(segs)
+        bestSegs=segs[best,utt_selector,:]
+        print(bestSegs.shape)
+        print(bestSegs)
+        print('      Best segmentation set: score = %s, prob = %s, num segs = %s' %(scores[utt_selector, best].sum(), pSeg[utt_selector, best].sum()/len(scores), bestSegs.sum()))
+        return bestSegs, bestSegs
     elif metric == 'mse':
         scores = np.array(scores)
         #scores = scores / (np.std(scores, axis=0)/10)
@@ -231,6 +239,13 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
         eScores = np.exp(-scores - MM)
         #approximately the probability of the sample given the data
         pSeg = eScores / eScores.sum(axis=0, keepdims=True)
+        best = np.argmin(scores)
+        print('      Best segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(best, scores[best][0], pSeg[best][0], segs[best].sum()))
+        return segs[best], segs[best]
+        seg_ix = np.where(np.random.multinomial(1, np.squeeze(pSeg)))[0][0]
+        print('      Sampled segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(seg_ix, scores[seg_ix][0], pSeg[seg_ix][0], segs[seg_ix].sum()))
+        print('')
+        return segs[seg_ix], segs[seg_ix]
     else:
         pSeg = scores / scores.sum(axis=0, keepdims=True)
 
@@ -251,6 +266,8 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
     #print("best score sample", np.argmax(-scores))
     #print("transformed losses for utt 0", eScores[:, 0])
     #print("best score sample", np.argmax(eScores))
+    #best_score = np.argmax(eScores)
+
     #print("top row of distr", pSeg[:, 0])
     #print("top row of correction", qSeg[:, 0])
     #print("top row of weights", wts[:, 0])
@@ -268,6 +285,10 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
 
     segWts = wtSegs.sum(axis=0)
     best = segWts > .5
+
+    #print("difference between best sample and guessed best", np.sum(segs[best_score]-best))
+    #print("total segmentations (best sample)", np.sum(segs[best_score]))
+    #print("total segmentations (best guess)", np.sum(best))
 
     # print("top row of wt segs", segWts[0])
     # print("max segs", best[0])
@@ -736,6 +757,8 @@ def reconstructFullMFCCs(speech_in, nonspeech_in):
         print('%s %s %s' %x)
     return out
             
+def KL(pSeg1,pSeg2):
+    return np.mean(pSeg1*(np.log(pSeg1/pSeg2)) + (1-pSeg1)*(np.log((1-pSeg1)/(1-pSeg2))))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -746,6 +769,9 @@ if __name__ == "__main__":
     parser.add_argument("--segHidden", default=100)
     parser.add_argument("--wordDropout", default=.5)
     parser.add_argument("--charDropout", default=.5)
+    parser.add_argument("--pretrainIters", default=None)
+    parser.add_argument("--trainNoSegIters", default=None)
+    parser.add_argument("--trainIters", default=None)
     parser.add_argument("--maxChar", default=None)
     parser.add_argument("--maxLen", default=None)
     parser.add_argument("--maxUtt", default=None)
@@ -753,7 +779,6 @@ if __name__ == "__main__":
     parser.add_argument("--logfile", default=None)
     parser.add_argument("--acoustic", action='store_true')
     parser.add_argument("--segfile", default=None)
-    parser.add_argument("--segout", default=None)
     parser.add_argument("--goldfile", default=None)
     parser.add_argument("--gpufrac", default=0.15)
     args = parser.parse_args()
@@ -762,15 +787,18 @@ if __name__ == "__main__":
     except:
         args.gpufrac = None
 
-    if args.segout:
-        os.makedirs(args.segout)
-
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpufrac)
     sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     K.set_session(sess)
 
     if args.acoustic:
         assert args.segfile and args.goldfile, 'Files containing initial and gold segmentations are required in acoustic mode.'
+        if not args.pretrainIters:
+            args.pretrainIters = 100
+        if not args.trainNoSegIters:
+            args.trainNoSegIters = 10
+        if not args.trainIters:
+            args.trainIters = 101
         if not args.batchSize:
             args.batchSize = 1000
         if not args.maxLen:
@@ -780,6 +808,12 @@ if __name__ == "__main__":
         if not args.maxChar:
             args.maxChar = 400
     else:
+        if not args.pretrainIters:
+            args.pretrainIters = 10
+        if not args.trainNoSegIters:
+            args.trainNoSegIters = 10
+        if not args.trainIters:
+            args.trainIters = 81
         if not args.batchSize:
             args.batchSize = 128
         if not args.maxLen:
@@ -809,8 +843,8 @@ if __name__ == "__main__":
         mfccs, FRAME_SIZE = readMFCCs(path)
         mfccs = filterMFCCs(mfccs, intervals, segs_init, FRAME_SIZE)
         doc_list = sorted(list(mfccs.keys()))
-        N_SAMPLES = 50
-        DEL_WT = 50
+        N_SAMPLES = 250
+        DEL_WT = 1 
         ONE_LETTER_WT = 50
         SEG_PENALTY = 0
 
@@ -823,6 +857,7 @@ if __name__ == "__main__":
         chars = ["X"] + charset
         print('total chars:', len(chars))
         ctable = CharacterTable(chars)
+        intervals = None # Speech intervals not relevant for character mode
         ## TODO: Change symbolic mode to allow multiple input files
         ## like acoustic mode currently does
         doc_list = ['main']
@@ -844,9 +879,9 @@ if __name__ == "__main__":
     maxutt = int(args.maxUtt)
     maxchar = int(args.maxChar)
     BATCH_SIZE = int(args.batchSize)
-    pretrain_iters = 10
-    train_noseg_iters = 10 
-    train_tot_iters = 81
+    pretrain_iters = int(args.pretrainIters)
+    train_noseg_iters = int(args.trainNoSegIters)
+    train_tot_iters = int(args.trainIters)
     RNN = recurrent.LSTM
     reverseUtt = True
     if args.acoustic:
@@ -950,7 +985,6 @@ if __name__ == "__main__":
         load_models = True
     
     print("Logging at", logdir)
-    logfile = file(logdir + "/log.txt", "w")
     
     if load_models and os.path.exists(logdir + 'model.h5'):
         print('Autoencoder checkpoint found. Loading weights...')
@@ -1000,6 +1034,7 @@ if __name__ == "__main__":
 
     ## pretrain
     while iteration < pretrain_iters and pretrain:
+        print(iteration)
         print()
         print('-' * 50)
         print('Iteration', iteration)
@@ -1100,6 +1135,10 @@ if __name__ == "__main__":
         print()
         print('-' * 50)
         print('Iteration', iteration)
+        if iteration < train_noseg_iters:
+            print(' Using initialization as proposal probability.')
+        else:
+            print(' Using segmenter network output as proposal probability.')
 
         ## mixed on/off policy learning?
         # alpha = min(1, (iteration / 30.))
@@ -1126,8 +1165,9 @@ if __name__ == "__main__":
             tdoc1 = time.time()
             if args.acoustic: # Don't batch by utt
                 s = 0
-                batch_ix = 1
+                batch_ix = 0
                 while s < XC[doc].shape[0]:
+                    batch_ix += 1
                     print('  Batch %d. Starting at frame %d.' %(batch_ix,s))
                     s, e = batchFrameIndices(forced[doc], BATCH_SIZE, start_ix=s)
                     printSome = False
@@ -1154,9 +1194,9 @@ if __name__ == "__main__":
 
                         loss = lossByUtt(model, X, y, X.shape[0], metric=METRIC)
 
-                        #print(loss)
-                        #print(DEL_WT * deleted)
-                        #print(ONE_LETTER_WT * deleted)
+                        #print(loss.sum())
+                        #print((DEL_WT * deleted).sum())
+                        #print((ONE_LETTER_WT * oneLetter).sum())
                         #print('')
                         #print((np.sum(loss + \
                         #                     DEL_WT * deleted + \
@@ -1171,7 +1211,12 @@ if __name__ == "__main__":
                     segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
                                                          metric=METRIC)
                     bestSegs[0,np.where(forced[doc][s:e])] = 1.
-                    
+                   
+                    # Testing random baseline
+                    #p = (np.zeros(bestSegs.shape) + 0.1)
+                    #p[0, np.where(forced[doc][s:e])] = 1.
+                    #bestSegs = sampleFrameSegs(p)
+
                     X,deleted,oneLetter,batch_len_char = splitMFCCs(batch_in, np.squeeze(bestSegs),
                                                         maxutt, maxlen, maxchar, FRAME_SIZE)
                     if reverseUtt:
@@ -1187,7 +1232,12 @@ if __name__ == "__main__":
                     print('    Updating models.')
                     loss = model.train_on_batch(X, y)
                     segmenter.train_on_batch(np.expand_dims(batch_in,0), np.expand_dims(segProbs, 2))
-                    #segmenter_out = np.squeeze(segmenter.predict(np.expand_dims(batch_in,0), verbose=0))
+                    seg_out = np.squeeze(segmenter.predict(np.expand_dims(batch_in,0), verbose=0))
+                    #print("      Peakiness in segmenter output (mean KL divergence from uniform):", KL(seg_out, np.ones(seg_out.shape)/2))
+                    print("      Number of probs > .5 in segmenter output:", (seg_out > 0.5).sum())
+                    print("      Number of probs > .2 in segmenter output:", (seg_out > 0.2).sum())
+                    print("      Number of probs > .15 in segmenter output:", (seg_out > 0.15).sum())
+                    print("      Number of probs > .1 in segmenter output:", (seg_out > 0.1).sum())
                     #print("      First 10 segProbs:", segProbs[0,:10])
                     #print("      First 10 bestSegs:", bestSegs[0,:10])
                     #print("      First 10 segmenter probs:", segmenter_out[:10])
@@ -1197,7 +1247,7 @@ if __name__ == "__main__":
                     epochSeg += bestSegs[:e-s].sum()
 
                     s = e
-                    batch_ix += 1
+                epochLoss /= batch_ix
 
             else:
                 for batch, inds in enumerate(batchIndices(X_train[doc], BATCH_SIZE)):
@@ -1353,12 +1403,12 @@ if __name__ == "__main__":
         print("One letter words:", epochOneL)
         print("Total segmentation points:", epochSeg)
         if args.acoustic:
-            printSegScore(getSegScore(text, frameSegs2timeSegs(intervals,allBestSegs), args.acoustic),True)
+            printSegScore(getSegScore(text, frameSegs2timeSegs(intervals,allBestSegs), args.acoustic),args.acoustic)
             printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir, TextGrid=False) 
             printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir, TextGrid=True) 
 
         else:
-            printSegScore(getSegScore(text, allBestSegs, args.acoustic),True)
+            printSegScore(getSegScore(text, allBestSegs, args.acoustic),args.acoustic)
         writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, 
                  text, allBestSegs, logdir, intervals, args.acoustic, print_headers=iteration==0)
 
