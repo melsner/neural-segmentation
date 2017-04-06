@@ -130,20 +130,31 @@ problem.
 
 \subsection{Working memory and learning biases}
 
-Bayesian models of word segmentation rely on two kinds of learning
+Cognitive models of word segmentation rely on two kinds of learning
 biases to structure their inferred lexicons: predictability within
-words (the prior over phonological forms), and Zipfian predictable
-unigram and bigram frequencies between words (the prior over word
-distributions). These biases control the entropy of utterances, making
-it easy for adult listeners to remember what they hear and reconstruct
-any missing parts from context \cite{xxx}. In particular, a standard
-model of working memory \cite{Baddeley74} \xxx{check citation! haven't
-  read the book, only articles} proposes that listeners store the past
-\xxx{few seconds} of the utterance in a \textit{phonological loop},
-from which words are transferred into \xxx{what}.
+words (often expressed as a prior over phonological forms), and
+Zipfian predictable unigram and bigram frequencies between words (a
+prior over word distributions). These biases control the entropy of
+utterances, making it easy for adult listeners to remember what they
+hear and reconstruct any missing parts from context
+\cite{Piantadosi12}. These biases correspond to different components
+in a standard model of working memory \cite{Baddeley07,Baddeley74}. In
+this model, listeners can store the last few items they heard in a
+\textit{phonological loop}, from which words are transferred into
+episodic memory which represents them at a syntactic/semantic level.
 
-Evidence for this viewpoint comes from experiments in which
-\xxx{what}.
+Evidence for the phonological loop comes from studies of second
+language learning. Forcing subjects to articulate a known word like
+``the'' (thus occupying their phonological memory) prevents them from
+remembering foreign-language words, but does not prevent them from
+learning new associations for known, native-language words. This
+suggests a dissociation between phonological and semantic memory,
+which explains why subjects have a greater capacity to recall
+connected sentences than strings of random words or syllables:
+Sentences are encoded using episodic memory rather than at the
+phonological level. When subjects make errors in reconstructing
+sentences, they remember which ideas they heard, but not the form in
+which they were expressed \cite{Bransford71}.
 
 \newcite{Baddeley98} claims that the phonological loop functions in
 word \textit{learning} as well as processing by proficient listeners,
@@ -205,7 +216,7 @@ outcompeting Gaussian/HMMs for supervised speech recognition
 \cite{xxx}. Recurrent neural nets also produce hidden representations
 differently than HMMs. Rather than use dynamic programming to search a
 latent space, they produce a single vector deterministically at each
-timestep. Models such as LSTMs \cite{Schmidhuber} can learn
+timestep. Models such as LSTMs \cite{Hochreiter97} can learn
 long-distance sequential dependencies in their input without making
 inference more expensive.
 
@@ -273,21 +284,29 @@ segmentations directly.
 \section{The Model}
 
 The model uses a basic encoder-decoder architecture now typical in
-machine translation \cite{xxx} and image captioning \cite{xxx}. In a
-typical encoder-decoder, the input is fed into an LSTM sequence model
-\cite{Schmidhuber} which represents it as a latent numeric
-embedding. This embedding is then fed into another sequence model,
-which uses it to generate an output sequence. Our two-level model
-performs this process in stages, first encoding every word,
-character-by-character, and then encoding the word sequence,
+machine translation \cite{Cho14} and image captioning
+\cite{Vinyals15}. In a typical encoder-decoder, the input is fed into
+an LSTM sequence model \cite{Hochreiter97} which represents it as a
+latent numeric embedding. This embedding is then fed into another
+sequence model, which uses it to generate an output sequence. Our
+two-level model performs this process in stages, first encoding every
+word, character-by-character, and then encoding the word sequence,
 vector-by-vector. In an autoencoder, the objective is to make input
 and output match; thus, the decoder performs the encoding stages in
 reverse. We provide the final encoder hidden state as input to each
-decoder unit \cite{xxx}. To force the system's learned embeddings to
-be robust to noise caused by mishearing or misremembering, we use
-dropout \cite{xxx} at the input (deleting individual timesteps) and at
-the word encoding layer (deleting entire words). This architecture is
-illustrated in Figure \ref{fig-arch}.
+decoder unit. To force the system's learned embeddings to be robust to
+noise caused by mishearing or misremembering, we use dropout
+\cite{Srivastava14} at the input (deleting individual timesteps) and
+at the word encoding layer (deleting entire words). This architecture
+is illustrated in Figure \ref{fig-arch}.
+
+\begin{figure*}
+\includegraphics[width=\textwidth]{arch.eps}
+\caption{Architecture of the model: top two panels show the
+  encoder/decoder, bottom panels show computation of breakpoints and
+  resulting loss. Horizontal arrows represent LSTMs.}
+\label{fig-arch}
+\end{figure*}
 
 The encoder-decoder does not predict segment boundaries directly, but
 gives an objective function (reconstruction loss) which can be used to
@@ -446,7 +465,7 @@ Fleck 08           & 95 & 74 & 83 & 71\\
 Ours (all) & 81 & 85 & 83 & 72\\
 Ours (test) & 81 & 86 & 83 & 72\\
 \end{tabular}
-\caption{stuff}
+\caption{Selected word segmentation results on the Brent corpus.}
 \label{tab-results}
 \end{table}
 
