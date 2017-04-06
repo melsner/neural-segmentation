@@ -1,6 +1,38 @@
 from __future__ import print_function, division
 import sys, numpy as np, time
 
+def reconstruct(chars, segs, maxutt, wholeSent=False):
+    uttWds = np.where(segs)[0][:maxutt]
+    prev = 0
+    words = [] 
+    for ii,bd in enumerate(uttWds):
+        word = chars[prev:bd + 1] 
+        words.append(word)
+        assert(word != "")
+        prev = bd + 1
+
+    if wholeSent:
+        if prev < len(chars):
+            word = chars[prev:len(chars)]
+            words.append(word)
+
+    return words
+
+def matToSegs(segmat, text):
+    if type(text[0][0]) == str: 
+        text = ["".join(utt) for utt in text]    
+    else:
+        text = [sum(utt, []) for utt in text]
+
+    res = [] 
+    for utt in range(len(text)):
+        thisSeg = segmat[utt]
+        #pass dummy max utt length to reconstruct everything
+        rText = reconstruct(text[utt], thisSeg, 100, wholeSent=True)
+        res.append(rText)
+
+    return res
+
 def precision_recall(n_matched, n_gold, n_proposed):
     """Calculates the classification precision and recall, given
     the number of true positives, the number of existing positives,
@@ -337,13 +369,13 @@ def getSegScore(text, allBestSeg, acoustic=False, out_file=None):
                 bm_tot, ba_tot, bP_tot = bm_tot+bm, ba_tot+ba, bP_tot+bP
                 swm_tot, swa_tot, swP_tot = swm_tot+swm, swa_tot+swa, swP_tot+swP
             else:
-                segmented = matToSegs(allBestSeg[doc], text)
+                segmented = matToSegs(allBestSeg[doc], text[doc])
                 #print(segmented)
                 #print(text)
 
-                (bp,br,bf) = scoreBreaks(text, segmented)
-                (swp,swr,swf) = scoreWords(text, segmented)
-                (lp,lr,lf) = scoreLexicon(text, segmented)
+                (bp,br,bf) = scoreBreaks(text[doc], segmented)
+                (swp,swr,swf) = scoreWords(text[doc], segmented)
+                (lp,lr,lf) = scoreLexicon(text[doc], segmented)
         else:
             print('Warning: Document ID "%s" in training data but not in gold. Skipping evaluation for this file.' %doc,file=out_file)
     if acoustic:

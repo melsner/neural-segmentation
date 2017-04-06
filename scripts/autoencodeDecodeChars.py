@@ -225,12 +225,17 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
         #approximately the probability of the sample given the data
         pSeg = eScores / eScores.sum(axis=0, keepdims=True)
         utt_selector = np.arange(pSeg.shape[0])
-        best = np.argmax(pSeg, axis=1)
-        segs = np.array(segs)
-        bestSegs=segs[best,utt_selector,:]
-        print(bestSegs.shape)
-        print(bestSegs)
-        print('      Best segmentation set: score = %s, prob = %s, num segs = %s' %(scores[utt_selector, best].sum(), pSeg[utt_selector, best].sum()/len(scores), bestSegs.sum()))
+        best = np.argmax(pSeg, axis=0)
+        bestSegs=[]
+        bestScore=0
+        bestProb=0
+        for ix in xrange(len(best)):
+            bestSegs.append(segs[best[ix]][ix,:])
+            bestScore += scores[best[ix],ix]
+            bestProb += pSeg[best[ix],ix]
+        bestProb /= len(best)
+        bestSegs = np.array(bestSegs)
+        print('      Best segmentation set: score = %s, prob = %s, num segs = %s' %(bestScore, bestProb, bestSegs.sum()))
         return bestSegs, bestSegs
     elif metric == 'mse':
         scores = np.array(scores)
@@ -348,38 +353,6 @@ def sampleSegments(model, text, maxutt, maxlen, ctable, verbose=False):
 
     return (allChars.sum() / allChars.size)"""
 
-def reconstruct(chars, segs, maxutt, wholeSent=False):
-    uttWds = np.where(segs)[0][:maxutt]
-    prev = 0
-    words = []
-    for ii,bd in enumerate(uttWds):
-        word = chars[prev:bd + 1]
-        words.append(word)
-        assert(word != "")
-        prev = bd + 1
-
-    if wholeSent:
-        if prev < len(chars):
-            word = chars[prev:len(chars)]
-            words.append(word)
-
-    return words
-
-def matToSegs(segmat, text):
-    if type(text[0][0]) == str:
-        text = ["".join(utt) for utt in text]    
-    else:
-        text = [sum(utt, []) for utt in text]
-
-    res = []
-    for utt in range(len(text)):
-        thisSeg = segmat[utt]
-        #pass dummy max utt length to reconstruct everything
-        rText = reconstruct(text[utt], thisSeg, 100, wholeSent=True)
-        res.append(rText)
-
-    return res
-
 def writeSolutions(logdir, model, segmenter, allBestSeg, text, iteration):
     model.save(logdir + "/model-%d.h5" % iteration)
     segmenter.save(logdir + "/segmenter-%d.h5" % iteration)
@@ -426,11 +399,13 @@ def writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, text, allBestS
                             file=f)
                 
     else:
+        allBestSeg = allBestSeg['main']
+        text = text['main']
         segmented = matToSegs(allBestSeg, text)
         (bp,br,bf) = scoreBreaks(text, segmented)
         (swp,swr,swf) = scoreWords(text, segmented)
         (lp,lr,lf) = scoreLexicon(text, segmented)
-        with open(logdir+'log.txt') as f:
+        with open(logdir+'log.txt', 'ab') as f:
             if print_headers:
                 print("\t".join([
                                 "iteration", "epochLoss", "epochDel", 
@@ -852,7 +827,8 @@ if __name__ == "__main__":
         printSegScore(getSegScore(text, frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
         print()
     else:
-        text, uttChars, charset = readText(path)
+        textGold, uttChars, charset = readText(path)
+        text = {'main': textGold}
         print('corpus length:', len(text))
         chars = ["X"] + charset
         print('total chars:', len(chars))
@@ -1417,7 +1393,7 @@ if __name__ == "__main__":
                 printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir) 
             else:
                 writeSolutions(logdir, model, segmenter,
-                               allBestSegs, text, iteration)
+                               allBestSegs['main'], text['main'], iteration)
         doc_ix = 0
         iteration += 1
 
