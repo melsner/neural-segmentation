@@ -526,7 +526,9 @@ def splitMFCCs(mfcc_intervals,segs,maxutt,maxlen,maxchar,FRAME_SIZE,start=0,n_ut
     out = {}
     deletedChars = []
     one_lett = []
-    words = np.split(mfcc_intervals[start:], np.where(segs[start:])[0])[1:]
+    words = np.split(mfcc_intervals[start:], np.where(segs[start:])[0])
+    if len(words[0]) == 0:
+        words = words[1:]
     utts = []
     utt = []
     utt_len_chars = 0
@@ -1164,6 +1166,8 @@ if __name__ == "__main__":
             if args.acoustic: # Don't batch by utt
                 s = 0
                 batch_ix = 0
+                docX = []
+                docy = []
                 while s < XC[doc].shape[0]:
                     batch_ix += 1
                     print('  Batch %d. Starting at frame %d.' %(batch_ix,s))
@@ -1206,7 +1210,7 @@ if __name__ == "__main__":
                                              ONE_LETTER_WT * oneLetter) + \
                                              SEG_PENALTY * segs.sum())[None,...])
                         segSamples.append(np.resize(segs, (1, BATCH_SIZE)))
-                    segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
+                    __, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
                                                          metric=METRIC)
                     bestSegs[0,np.where(forced[doc][s:e])] = 1.
                    
@@ -1221,31 +1225,33 @@ if __name__ == "__main__":
                         y = X[:, ::-1, :]
                     else:
                         y = X
+                    docX.append(X)
+                    docy.append(y)
 
                     if s == 0:
                         allBestSegs[doc] = np.squeeze(bestSegs)[:e-s]
                     else:
                         allBestSegs[doc] = np.append(allBestSegs[doc],np.squeeze(bestSegs)[:e-s])
-
-                    print('    Updating models.')
-                    loss = model.train_on_batch(X, y)
-                    segmenter.train_on_batch(np.expand_dims(batch_in,0), np.expand_dims(segProbs, 2))
-                    seg_out = np.squeeze(segmenter.predict(np.expand_dims(batch_in,0), verbose=0))
-                    #print("      Peakiness in segmenter output (mean KL divergence from uniform):", KL(seg_out, np.ones(seg_out.shape)/2))
-                    print("      Number of probs > .5 in segmenter output:", (seg_out > 0.5).sum())
-                    print("      Number of probs > .2 in segmenter output:", (seg_out > 0.2).sum())
-                    print("      Number of probs > .15 in segmenter output:", (seg_out > 0.15).sum())
-                    print("      Number of probs > .1 in segmenter output:", (seg_out > 0.1).sum())
-                    #print("      First 10 segProbs:", segProbs[0,:10])
-                    #print("      First 10 bestSegs:", bestSegs[0,:10])
-                    #print("      First 10 segmenter probs:", segmenter_out[:10])
-                    epochLoss += loss[0]
                     epochDel += deleted.sum()
                     epochOneL += oneLetter.sum()
-                    epochSeg += bestSegs[:e-s].sum()
-
                     s = e
-                epochLoss /= batch_ix
+
+                docX = np.array(docX)
+                docy = np.array(docy)
+                print('    Updating models.')
+                loss = model.train_on_batch(docX, docy)
+                segmenter.train_on_batch(np.expand_dims(XC[doc],0), np.expand_dims(allBestSegs[doc], 2))
+                seg_out = np.squeeze(segmenter.predict(np.expand_dims(XC[doc],0), verbose=0))
+                #print("      Peakiness in segmenter output (mean KL divergence from uniform):", KL(seg_out, np.ones(seg_out.shape)/2))
+                print("      Number of probs > .5 in segmenter output:", (seg_out > 0.5).sum())
+                print("      Number of probs > .2 in segmenter output:", (seg_out > 0.2).sum())
+                print("      Number of probs > .15 in segmenter output:", (seg_out > 0.15).sum())
+                print("      Number of probs > .1 in segmenter output:", (seg_out > 0.1).sum())
+                #print("      First 10 segProbs:", segProbs[0,:10])
+                #print("      First 10 bestSegs:", bestSegs[0,:10])
+                #print("      First 10 segmenter probs:", segmenter_out[:10])
+                epochLoss += loss[0]
+                epochSeg += allBestSegs[doc].sum()
 
             else:
                 for batch, inds in enumerate(batchIndices(X_train[doc], BATCH_SIZE)):

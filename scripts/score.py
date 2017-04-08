@@ -357,6 +357,7 @@ def scoreLexicon(underlying, found):
     return precision_recall_f(matched, actual, proposed)
 
 def getSegScore(text, allBestSeg, acoustic=False, out_file=None):
+    t0 = time.time()
     scores = dict.fromkeys(allBestSeg.keys())
     if not out_file:
         out_file = sys.stdout
@@ -382,10 +383,11 @@ def getSegScore(text, allBestSeg, acoustic=False, out_file=None):
         bp,br,bf = precision_recall_f(bm_tot,ba_tot,bP_tot)
         swp,swr,swf = precision_recall_f(swm_tot,swa_tot,swP_tot)
         scores['##overall##'] = (bm_tot,ba_tot,bP_tot), (bp,br,bf), (swm_tot,swa_tot,swP_tot), (swp,swr,swf)
+    t1 = time.time()
+    print('Scoring took %d seconds.' %(t1-t0))
     return scores
 
 def printSegScore(scores, acoustic=False, by_document=True, out_file=None):
-    t0 = time.time()
     print('Per-document scores:', file=out_file)
     for doc in sorted(scores.keys()):
         if scores[doc] != None and doc != '##overall##':
@@ -405,7 +407,5 @@ def printSegScore(scores, acoustic=False, by_document=True, out_file=None):
         print('Overall score:', file=out_file)
         print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
         print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
-    t1 = time.time()
-    print('Scoring took %d seconds.' %(t1-t0))
 
 
