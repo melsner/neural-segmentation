@@ -244,13 +244,22 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
         eScores = np.exp(-scores - MM)
         #approximately the probability of the sample given the data
         pSeg = eScores / eScores.sum(axis=0, keepdims=True)
-        best = np.argmin(scores)
-        print('      Best segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(best, scores[best][0], pSeg[best][0], segs[best].sum()))
-        return segs[best], segs[best]
-        seg_ix = np.where(np.random.multinomial(1, np.squeeze(pSeg)))[0][0]
-        print('      Sampled segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(seg_ix, scores[seg_ix][0], pSeg[seg_ix][0], segs[seg_ix].sum()))
-        print('')
-        return segs[seg_ix], segs[seg_ix]
+        best_score = np.argmin(scores)
+        print('      Best segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(best_score, scores[best_score][0], pSeg[best_score][0], segs[best_score].sum()))
+    elif metric == 'mse1best':
+        scores = np.array(scores)
+        #scores = scores / (np.std(scores, axis=0)/10)
+        MM = np.max(-scores, axis=0, keepdims=True)
+        eScores = np.exp(-scores - MM)
+        #approximately the probability of the sample given the data
+        pSeg = eScores / eScores.sum(axis=0, keepdims=True)
+        best_score = np.argmin(scores)
+        print('      Best segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(best_score, scores[best_score][0], pSeg[best_score][0], segs[best_score].sum()))
+        return segs[best_score], segs[best_score]
+        #seg_ix = np.where(np.random.multinomial(1, np.squeeze(pSeg)))[0][0]
+        #print('      Sampled segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(seg_ix, scores[seg_ix][0], pSeg[seg_ix][0], segs[seg_ix].sum()))
+        #print('')
+        #return segs[seg_ix], segs[seg_ix]
     else:
         pSeg = scores / scores.sum(axis=0, keepdims=True)
 
@@ -289,11 +298,11 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
     #    print("contrib", wtSegs[si, 0])
 
     segWts = wtSegs.sum(axis=0)
-    best = segWts > .5
+    best = segs[best_score] # segWts > .5
 
-    #print("difference between best sample and guessed best", np.sum(segs[best_score]-best))
-    #print("total segmentations (best sample)", np.sum(segs[best_score]))
-    #print("total segmentations (best guess)", np.sum(best))
+    #print("        Difference between best sample and guessed best", np.sum(segs[best_score]-best))
+    #print("        Total segmentations (best sample)", np.sum(segs[best_score]))
+    #print("        Total segmentations (best guess)", np.sum(best))
 
     # print("top row of wt segs", segWts[0])
     # print("max segs", best[0])
@@ -373,22 +382,21 @@ def writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, text, allBestS
     if acoustic:
         allBestSeg = frameSegs2timeSegs(intervals,allBestSeg)
         headers = ['iteration', 'epochLoss', 'epochDel', 'epochOneL', 'epochSeg']
-        scores_wrd = {}
-        scores_phn = {}
+        scores = {'wrd': None, 'phn': None}
         if text['wrd']:
             headers += ['bp_wrd', 'br_wrd', 'bf_wrd', 'swp_wrd', 'swr_wrd', 'swf_wrd']
-            scores_wrd = getSegScore(text['wrd'],allBestSeg,acoustic=True)
+            scores['wrd'] = getSegScores(text['wrd'],allBestSeg,acoustic=True)
         if text['phn']:
             headers += ['bp_phn', 'br_phn', 'bf_phn', 'swp_phn', 'swr_phn', 'swf_phn']
-            scores_phn = getSegScore(text['phn'],allBestSeg,acoustic=True)
-        for doc in set(scores_wrd.keys() + scores_phn.keys()):
+            scores['phn'] = getSegScores(text['phn'],allBestSeg,acoustic=True)
+        for doc in set(scores['wrd'].keys() + scores['phn'].keys()):
             if not doc == '##overall##':
                 score_row = [iteration, epochLoss, epochDel, epochOneL, epochSeg]
-                if text['wrd'] and scores_wrd[doc]:
-                    _, (bp,br,bf), _, (swp,swr,swf) = scores_wrd[doc]
+                if text['wrd'] and scores['wrd'][doc]:
+                    _, (bp,br,bf), _, (swp,swr,swf) = scores['wrd'][doc]
                     score_row += [bp, br, bf, swp, swr, swf]
-                if text['phn'] and scores_phn[doc]:
-                    _, (bp,br,bf), _, (swp,swr,swf) = scores_phn[doc]
+                if text['phn'] and scores['phn'][doc]:
+                    _, (bp,br,bf), _, (swp,swr,swf) = scores['phn'][doc]
                     score_row += [bp, br, bf, swp, swr, swf]
                 with open(logdir+doc+'_log.txt', 'ab') as f:
                     if print_headers:
@@ -399,12 +407,13 @@ def writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, text, allBestS
                 print("\t".join(headers), file=f)
             score_row = [iteration, epochLoss, epochDel, epochOneL, epochSeg]
             if text['wrd']:
-                _, (bp,br,bf), _, (swp,swr,swf) = scores_wrd['##overall##']
+                _, (bp,br,bf), _, (swp,swr,swf) = scores['wrd']['##overall##']
                 score_row += [bp, br, bf, swp, swr, swf]
             if text['phn']:
-                _, (bp,br,bf), _, (swp,swr,swf) = scores_phn['##overall##']
+                _, (bp,br,bf), _, (swp,swr,swf) = scores['phn']['##overall##']
                 score_row += [bp, br, bf, swp, swr, swf]
             print("\t".join(["%g" % xx for xx in score_row]), file=f)
+        return scores
     else:
         allBestSeg = allBestSeg['main']
         text = text['main']
@@ -845,10 +854,10 @@ if __name__ == "__main__":
 
         if text['wrd']:
             print('Initial word segmentation scores:')
-            printSegScore(getSegScore(text['wrd'], frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
+            printSegScores(getSegScores(text['wrd'], frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
         if text['phn']:
             print('Initial phone segmentation scores:')
-            printSegScore(getSegScore(text['phn'], frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
+            printSegScores(getSegScores(text['phn'], frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
         print()
     else:
         textGold, uttChars, charset = readText(path)
@@ -1127,6 +1136,9 @@ if __name__ == "__main__":
         XC = mfccs
     else:
         XC = {'main': uttsToCharVectors(uttChars, maxchar, ctable)}
+    segScores = {'wrd': dict.fromkeys(doc_list), 'phn': dict.fromkeys(doc_list)}
+    segScores['wrd']['##overall##'] = [(0,0,0), None, (0,0,0), None]
+    segScores['phn']['##overall##'] = [(0,0,0), None, (0,0,0), None]
     print()
 
     print('Co-training autoencoder and segmenter...')
@@ -1166,8 +1178,6 @@ if __name__ == "__main__":
             if args.acoustic: # Don't batch by utt
                 s = 0
                 batch_ix = 0
-                docX = []
-                docy = []
                 while s < XC[doc].shape[0]:
                     batch_ix += 1
                     print('  Batch %d. Starting at frame %d.' %(batch_ix,s))
@@ -1210,7 +1220,7 @@ if __name__ == "__main__":
                                              ONE_LETTER_WT * oneLetter) + \
                                              SEG_PENALTY * segs.sum())[None,...])
                         segSamples.append(np.resize(segs, (1, BATCH_SIZE)))
-                    __, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
+                    segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
                                                          metric=METRIC)
                     bestSegs[0,np.where(forced[doc][s:e])] = 1.
                    
@@ -1225,33 +1235,52 @@ if __name__ == "__main__":
                         y = X[:, ::-1, :]
                     else:
                         y = X
-                    docX.append(X)
-                    docy.append(y)
 
                     if s == 0:
                         allBestSegs[doc] = np.squeeze(bestSegs)[:e-s]
                     else:
                         allBestSegs[doc] = np.append(allBestSegs[doc],np.squeeze(bestSegs)[:e-s])
+
+                    print('    Updating models.')
+                    loss = model.train_on_batch(X, y)
+                    segmenter.train_on_batch(np.expand_dims(batch_in,0), np.expand_dims(segProbs, 2))
+                    seg_out = np.squeeze(segmenter.predict(np.expand_dims(batch_in,0), verbose=0))
+                    #print("      Peakiness in segmenter output (mean KL divergence from uniform):", KL(seg_out, np.ones(seg_out.shape)/2))
+                    print("      Number of probs > .5 in segmenter output:", (seg_out > 0.5).sum())
+                    print("      Number of probs > .2 in segmenter output:", (seg_out > 0.2).sum())
+                    print("      Number of probs > .15 in segmenter output:", (seg_out > 0.15).sum())
+                    print("      Number of probs > .1 in segmenter output:", (seg_out > 0.1).sum())
+                    #print("      First 10 segProbs:", segProbs[0,:10])
+                    #print("      First 10 bestSegs:", bestSegs[0,:10])
+                    #print("      First 10 segmenter probs:", segmenter_out[:10])
+                    epochLoss += loss[0]
                     epochDel += deleted.sum()
                     epochOneL += oneLetter.sum()
-                    s = e
+                    epochSeg += bestSegs[:e-s].sum()
 
-                docX = np.array(docX)
-                docy = np.array(docy)
-                print('    Updating models.')
-                loss = model.train_on_batch(docX, docy)
-                segmenter.train_on_batch(np.expand_dims(XC[doc],0), np.expand_dims(allBestSegs[doc], 2))
-                seg_out = np.squeeze(segmenter.predict(np.expand_dims(XC[doc],0), verbose=0))
-                #print("      Peakiness in segmenter output (mean KL divergence from uniform):", KL(seg_out, np.ones(seg_out.shape)/2))
-                print("      Number of probs > .5 in segmenter output:", (seg_out > 0.5).sum())
-                print("      Number of probs > .2 in segmenter output:", (seg_out > 0.2).sum())
-                print("      Number of probs > .15 in segmenter output:", (seg_out > 0.15).sum())
-                print("      Number of probs > .1 in segmenter output:", (seg_out > 0.1).sum())
-                #print("      First 10 segProbs:", segProbs[0,:10])
-                #print("      First 10 bestSegs:", bestSegs[0,:10])
-                #print("      First 10 segmenter probs:", segmenter_out[:10])
-                epochLoss += loss[0]
-                epochSeg += allBestSegs[doc].sum()
+                    s = e
+                epochLoss /= batch_ix
+
+                timeSeg = frameSeg2timeSeg(intervals[doc],allBestSegs[doc])
+
+                if args.goldwrd:
+                    segScores['wrd'][doc] = getSegScore(text['wrd'][doc], timeSeg)
+                    (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = segScores['wrd'][doc]
+                    (bm_tot, ba_tot, bP_tot), _, (swm_tot, swa_tot, swP_tot), _ = segScores['wrd']['##overall##']
+                    bm_tot, ba_tot, bP_tot = bm_tot+bm, ba_tot+ba, bP_tot+bP
+                    swm_tot, swa_tot, swP_tot = swm_tot+swm, swa_tot+swa, swP_tot+swP
+                    segScores['wrd']['##overall##'] = [(bm_tot, ba_tot, bP_tot), None, (swm_tot, swa_tot, swP_tot), None]
+                    print('Word segmentation score:')
+                    printSegScore(segScores['wrd'][doc], doc, args.acoustic)
+                if args.goldphn:
+                    segScores['phn'][doc] = getSegScore(text['phn'][doc], timeSeg)
+                    (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = segScores['phn'][doc]
+                    (bm_tot, ba_tot, bP_tot), _, (swm_tot, swa_tot, swP_tot), _ = segScores['phn']['##overall##']
+                    bm_tot, ba_tot, bP_tot = bm_tot+bm, ba_tot+ba, bP_tot+bP
+                    swm_tot, swa_tot, swP_tot = swm_tot+swm, swa_tot+swa, swP_tot+swP
+                    segScores['phn']['##overall##'] = [(bm_tot, ba_tot, bP_tot), None, (swm_tot, swa_tot, swP_tot), None]
+                    print('Phone segmentation score:')
+                    printSegScore(segScores['phn'][doc], doc, args.acoustic)
 
             else:
                 for batch, inds in enumerate(batchIndices(X_train[doc], BATCH_SIZE)):
@@ -1406,20 +1435,24 @@ if __name__ == "__main__":
         print("Deletions:", epochDel)
         print("One letter words:", epochOneL)
         print("Total segmentation points:", epochSeg)
+        segScore = writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, 
+                 text, allBestSegs, logdir, intervals, args.acoustic, print_headers=iteration==0)
         if args.acoustic:
             if text['wrd']:
+                segScores['wrd']['##overall##'][1] = precision_recall_f(*segScores['wrd']['##overall##'][0])
+                segScores['wrd']['##overall##'][3] = precision_recall_f(*segScores['wrd']['##overall##'][2])
                 print('Word segmentation scores:')
-                printSegScore(getSegScore(text['wrd'], frameSegs2timeSegs(intervals,allBestSegs), args.acoustic),args.acoustic)
+                printSegScore(segScore['wrd']['##overall##'], 'All Data',args.acoustic)
             if text['phn']:
+                segScores['phn']['##overall##'][1] = precision_recall_f(*segScores['phn']['##overall##'][0])
+                segScores['phn']['##overall##'][3] = precision_recall_f(*segScores['phn']['##overall##'][2])
                 print('Phone segmentation scores:')
-                printSegScore(getSegScore(text['phn'], frameSegs2timeSegs(intervals,allBestSegs), args.acoustic),args.acoustic)
+                printSegScore(segScore['phn']['##overall##'], 'All Data',args.acoustic)
             printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir, TextGrid=False) 
             printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir, TextGrid=True) 
 
         else:
-            printSegScore(getSegScore(text, allBestSegs, args.acoustic),args.acoustic)
-        writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, 
-                 text, allBestSegs, logdir, intervals, args.acoustic, print_headers=iteration==0)
+            printSegScores(getSegScores(text, allBestSegs, args.acoustic),args.acoustic)
 
         if iteration % 10 == 0:
             if args.acoustic:
