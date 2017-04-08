@@ -1,6 +1,9 @@
-import os
+import os, sys
 
-run = False
+if len(sys.argv) > 1:
+    run = bool(sys.argv[1])
+else:
+    run = False
 
 if __name__ == "__main__":
     preamble = file("scripts/runNN.sh").read()
