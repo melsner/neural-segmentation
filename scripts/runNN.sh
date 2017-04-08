@@ -4,9 +4,9 @@
 #PBS -l walltime=48:00:00
 
 module load python/2.7
-module load cuda
 cd $PBS_O_WORKDIR
-source activate local
+source activate owens
 export KERAS_BACKEND=tensorflow
+module load cuda
 
 mkdir -p logs
