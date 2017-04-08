@@ -1,7 +1,7 @@
 from __future__ import print_function, division
 import argparse
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+#os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 from keras.models import Model, Sequential, load_model
 try:
     from keras.engine.training import slice_X
@@ -750,6 +750,7 @@ if __name__ == "__main__":
     parser.add_argument("--maxChar", default=None)
     parser.add_argument("--maxLen", default=None)
     parser.add_argument("--maxUtt", default=None)
+    parser.add_argument("--nSamples", default=None)
     parser.add_argument("--batchSize", default=None)
     parser.add_argument("--logfile", default=None)
     parser.add_argument("--acoustic", action='store_true')
@@ -765,6 +766,8 @@ if __name__ == "__main__":
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpufrac)
     sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     K.set_session(sess)
+    K.set_learning_phase(1)
+    print(K.learning_phase())
 
     if args.acoustic:
         assert args.segfile and args.goldfile, 'Files containing initial and gold segmentations are required in acoustic mode.'
@@ -774,6 +777,8 @@ if __name__ == "__main__":
             args.trainNoSegIters = 10
         if not args.trainIters:
             args.trainIters = 101
+        if not args.nSamples:
+            args.nSamples = 100
         if not args.batchSize:
             args.batchSize = 1000
         if not args.maxLen:
@@ -789,6 +794,8 @@ if __name__ == "__main__":
             args.trainNoSegIters = 10
         if not args.trainIters:
             args.trainIters = 81
+        if not args.nSamples:
+            args.nSamples = 50
         if not args.batchSize:
             args.batchSize = 128
         if not args.maxLen:
@@ -818,7 +825,6 @@ if __name__ == "__main__":
         mfccs, FRAME_SIZE = readMFCCs(path)
         mfccs = filterMFCCs(mfccs, intervals, segs_init, FRAME_SIZE)
         doc_list = sorted(list(mfccs.keys()))
-        N_SAMPLES = 250
         DEL_WT = 1 
         ONE_LETTER_WT = 50
         SEG_PENALTY = 0
@@ -837,7 +843,6 @@ if __name__ == "__main__":
         ## TODO: Change symbolic mode to allow multiple input files
         ## like acoustic mode currently does
         doc_list = ['main']
-        N_SAMPLES = 50
         DEL_WT = 50
         ONE_LETTER_WT = 50
     
@@ -854,6 +859,7 @@ if __name__ == "__main__":
     maxlen = int(args.maxLen)
     maxutt = int(args.maxUtt)
     maxchar = int(args.maxChar)
+    N_SAMPLES = int(args.nSamples)
     BATCH_SIZE = int(args.batchSize)
     pretrain_iters = int(args.pretrainIters)
     train_noseg_iters = int(args.trainNoSegIters)
@@ -1289,7 +1295,7 @@ if __name__ == "__main__":
                     epochLoss += loss[0]
                     epochDel += deleted.sum()
                     epochOneL += oneLetter.sum()
-                    epochSeg += allBestSegs[doc].sum()
+                    epochSeg += bestSegs.sum()
 
                     # if batch % 25 == 0:
                     #     print("Loss:", loss)
