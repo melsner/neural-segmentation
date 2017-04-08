@@ -372,32 +372,39 @@ def writeSolutions(logdir, model, segmenter, allBestSeg, text, iteration):
 def writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, text, allBestSeg, logdir, intervals=None, acoustic=False, print_headers=False):
     if acoustic:
         allBestSeg = frameSegs2timeSegs(intervals,allBestSeg)
-        scores = getSegScore(text,allBestSeg,acoustic=True)
-        for doc in scores:
-            if scores[doc] != None and not doc == '##overall##':
-                _, (bp,br,bf), _, (swp,swr,swf) = scores[doc]
+        headers = ['iteration', 'epochLoss', 'epochDel', 'epochOneL', 'epochSeg']
+        scores_wrd = {}
+        scores_phn = {}
+        if text['wrd']:
+            headers += ['bp_wrd', 'br_wrd', 'bf_wrd', 'swp_wrd', 'swr_wrd', 'swf_wrd']
+            scores_wrd = getSegScore(text['wrd'],allBestSeg,acoustic=True)
+        if text['phn']:
+            headers += ['bp_phn', 'br_phn', 'bf_phn', 'swp_phn', 'swr_phn', 'swf_phn']
+            scores_phn = getSegScore(text['phn'],allBestSeg,acoustic=True)
+        for doc in set(scores_wrd.keys() + scores_phn.keys()):
+            if not doc == '##overall##':
+                score_row = [iteration, epochLoss, epochDel, epochOneL, epochSeg]
+                if text['wrd'] and scores_wrd[doc]:
+                    _, (bp,br,bf), _, (swp,swr,swf) = scores_wrd[doc]
+                    score_row += [bp, br, bf, swp, swr, swf]
+                if text['phn'] and scores_phn[doc]:
+                    _, (bp,br,bf), _, (swp,swr,swf) = scores_phn[doc]
+                    score_row += [bp, br, bf, swp, swr, swf]
                 with open(logdir+doc+'_log.txt', 'ab') as f:
                     if print_headers:
-                        print("\t".join([
-                                        "iteration", "epochLoss", "epochDel",
-                                        "epochOneL", "epochSeg",
-                                        "bp", "br", "bf", "swp", "swr", "swf"]),
-                                        file=f)
-                    print("\t".join(["%g" % xx for xx in [
-                                    iteration, epochLoss, epochDel, epochOneL, epochSeg, bp, br, bf, swp, swr, swf,]]),
-                                    file=f)
-        _, (bp,br,bf), _, (swp,swr,swf) = scores['##overall##']
+                        print("\t".join(headers), file=f)
+                    print("\t".join(["%g" % xx for xx in score_row]), file=f)
         with open(logdir+'log.txt', 'ab') as f:
             if print_headers:
-                print("\t".join([
-                                "iteration", "epochLoss", "epochDel", 
-                                "epochOneL", "epochSeg",
-                                "bp", "br", "bf", "swp", "swr", "swf"]),
-                                file=f)
-            print("\t".join(["%g" % xx for xx in [
-                            iteration, epochLoss, epochDel, epochOneL, epochSeg, bp, br, bf, swp, swr, swf,]]),
-                            file=f)
-                
+                print("\t".join(headers), file=f)
+            score_row = [iteration, epochLoss, epochDel, epochOneL, epochSeg]
+            if text['wrd']:
+                _, (bp,br,bf), _, (swp,swr,swf) = scores_wrd['##overall##']
+                score_row += [bp, br, bf, swp, swr, swf]
+            if text['phn']:
+                _, (bp,br,bf), _, (swp,swr,swf) = scores_phn['##overall##']
+                score_row += [bp, br, bf, swp, swr, swf]
+            print("\t".join(["%g" % xx for xx in score_row]), file=f)
     else:
         allBestSeg = allBestSeg['main']
         text = text['main']
@@ -755,7 +762,8 @@ if __name__ == "__main__":
     parser.add_argument("--logfile", default=None)
     parser.add_argument("--acoustic", action='store_true')
     parser.add_argument("--segfile", default=None)
-    parser.add_argument("--goldfile", default=None)
+    parser.add_argument("--goldwrd", default=None)
+    parser.add_argument("--goldphn", default=None)
     parser.add_argument("--gpufrac", default=0.15)
     args = parser.parse_args()
     try:
@@ -770,7 +778,7 @@ if __name__ == "__main__":
     print(K.learning_phase())
 
     if args.acoustic:
-        assert args.segfile and args.goldfile, 'Files containing initial and gold segmentations are required in acoustic mode.'
+        assert args.segfile and (args.goldwrd or args.goldphn), 'Files containing initial and gold segmentations are required in acoustic mode.'
         if not args.pretrainIters:
             args.pretrainIters = 100
         if not args.trainNoSegIters:
@@ -821,7 +829,11 @@ if __name__ == "__main__":
         # indexed by document ID
         intervals, segs_init = timeSeg2frameSeg(args.segfile)
         forced = intervals2forcedSeg(intervals)
-        text = readGoldFrameSeg(args.goldfile)
+        text = {'wrd': None, 'phn': None}
+        if args.goldwrd:
+            text['wrd'] = readGoldFrameSeg(args.goldwrd)
+        if args.goldphn:
+            text['phn'] = readGoldFrameSeg(args.goldphn)
         mfccs, FRAME_SIZE = readMFCCs(path)
         mfccs = filterMFCCs(mfccs, intervals, segs_init, FRAME_SIZE)
         doc_list = sorted(list(mfccs.keys()))
@@ -829,8 +841,12 @@ if __name__ == "__main__":
         ONE_LETTER_WT = 50
         SEG_PENALTY = 0
 
-        print('Initial segmentation scores:')
-        printSegScore(getSegScore(text, frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
+        if text['wrd']:
+            print('Initial word segmentation scores:')
+            printSegScore(getSegScore(text['wrd'], frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
+        if text['phn']:
+            print('Initial phone segmentation scores:')
+            printSegScore(getSegScore(text['phn'], frameSegs2timeSegs(intervals,segs_init), args.acoustic),True)
         print()
     else:
         textGold, uttChars, charset = readText(path)
@@ -957,7 +973,7 @@ if __name__ == "__main__":
     # Set up logging, load any saved data
     load_models = False
     if args.logfile == None:
-        logdir = "logs/" + str(os.getpid())
+        logdir = "logs/" + str(os.getpid()) + '/'
     else:
         logdir = "logs/" + args.logfile
 
@@ -1385,7 +1401,12 @@ if __name__ == "__main__":
         print("One letter words:", epochOneL)
         print("Total segmentation points:", epochSeg)
         if args.acoustic:
-            printSegScore(getSegScore(text, frameSegs2timeSegs(intervals,allBestSegs), args.acoustic),args.acoustic)
+            if text['wrd']:
+                print('Word segmentation scores:')
+                printSegScore(getSegScore(text['wrd'], frameSegs2timeSegs(intervals,allBestSegs), args.acoustic),args.acoustic)
+            if text['phn']:
+                print('Phone segmentation scores:')
+                printSegScore(getSegScore(text['phn'], frameSegs2timeSegs(intervals,allBestSegs), args.acoustic),args.acoustic)
             printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir, TextGrid=False) 
             printTimeSegs(frameSegs2timeSegs(intervals,allBestSegs), out_file=logdir, TextGrid=True) 
 
