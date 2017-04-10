@@ -11,5 +11,5 @@ args = argparser.parse_args()
 gold = readGoldFrameSeg(args.gold)
 test = readGoldFrameSeg(args.test)
 
-scores = getSegScore(gold, test, True)
-printSegScore(scores, True)
+scores = getSegScores(gold, test, True)
+printSegScores(scores, True)

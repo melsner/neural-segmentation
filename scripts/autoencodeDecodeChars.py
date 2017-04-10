@@ -200,7 +200,7 @@ def lossByUtt(model, Xb, yb, BATCH_SIZE, metric="logprob"):
         pRight = logP * yb
         #sum out word, char, len(chars)
         return pRight.sum(axis=(1, 2, 3))
-    elif metric == 'mse':
+    elif metric in ['mse', 'mse1best']:
         return np.mean((preds - yb)**2, axis=(1,2,3))
     else:
         right = (np.argmax(preds, axis=-1) == np.argmax(yb, axis=-1))
@@ -255,6 +255,8 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
         pSeg = eScores / eScores.sum(axis=0, keepdims=True)
         best_score = np.argmin(scores)
         print('      Best segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(best_score, scores[best_score][0], pSeg[best_score][0], segs[best_score].sum()))
+        worst_score = np.argmax(scores)
+        print('      Worst segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(worst_score, scores[worst_score][0], pSeg[worst_score][0], segs[worst_score].sum()))
         return segs[best_score], segs[best_score]
         #seg_ix = np.where(np.random.multinomial(1, np.squeeze(pSeg)))[0][0]
         #print('      Sampled segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(seg_ix, scores[seg_ix][0], pSeg[seg_ix][0], segs[seg_ix].sum()))
@@ -525,7 +527,7 @@ def filterMFCCs(mfccs, intervals, segs, FRAME_SIZE=40):
         for i in intervals[doc]:
             sf, ef = int(np.rint(float(i[0]*100))), int(np.rint(float(i[1]*100)))
             mfcc_intervals[doc] = np.append(mfcc_intervals[doc], mfccs[doc][sf:ef,:], 0)
-        print('Document "%s" has %d speech frames.' %(doc, len(mfccs[doc])))
+        print('Document "%s" has %d speech frames.' %(doc, len(mfcc_intervals[doc])))
     return mfcc_intervals
 
 
@@ -768,6 +770,9 @@ if __name__ == "__main__":
     parser.add_argument("--maxChar", default=None)
     parser.add_argument("--maxLen", default=None)
     parser.add_argument("--maxUtt", default=None)
+    parser.add_argument("--delWt", default=None)
+    parser.add_argument("--oneLWt", default=None)
+    parser.add_argument("--segWt", default=None)
     parser.add_argument("--nSamples", default=None)
     parser.add_argument("--batchSize", default=None)
     parser.add_argument("--logfile", default=None)
@@ -806,6 +811,12 @@ if __name__ == "__main__":
             args.maxUtt = 50
         if not args.maxChar:
             args.maxChar = 400
+        if not args.delWt:
+            args.delWt = 1
+        if not args.oneLWt:
+            args.oneLWt = 50
+        if not args.segWt:
+            args.segWt = 0
     else:
         if not args.pretrainIters:
             args.pretrainIters = 10
@@ -823,6 +834,12 @@ if __name__ == "__main__":
             args.maxUtt = 10
         if not args.maxChar:
             args.maxChar = 30
+        if not args.delWt:
+            args.delWt = 50
+        if not args.oneLWt:
+            args.oneLWt = 10
+        if not args.segWt:
+            args.segWt = 0
 
     path = args.data
     #pseudWeights = args.pseudWeights
@@ -848,9 +865,6 @@ if __name__ == "__main__":
         mfccs, FRAME_SIZE = readMFCCs(path)
         mfccs = filterMFCCs(mfccs, intervals, segs_init, FRAME_SIZE)
         doc_list = sorted(list(mfccs.keys()))
-        DEL_WT = 1 
-        ONE_LETTER_WT = 50
-        SEG_PENALTY = 0
 
         if text['wrd']:
             print('Initial word segmentation scores:')
@@ -870,8 +884,6 @@ if __name__ == "__main__":
         ## TODO: Change symbolic mode to allow multiple input files
         ## like acoustic mode currently does
         doc_list = ['main']
-        DEL_WT = 50
-        ONE_LETTER_WT = 50
     
     t1 = time.time()
     print('Data loaded in %ds.' %(t1-t0))
@@ -886,6 +898,9 @@ if __name__ == "__main__":
     maxlen = int(args.maxLen)
     maxutt = int(args.maxUtt)
     maxchar = int(args.maxChar)
+    DEL_WT = float(args.delWt)
+    ONE_LETTER_WT = float(args.oneLWt)
+    SEG_WT = float(args.segWt)
     N_SAMPLES = int(args.nSamples)
     BATCH_SIZE = int(args.batchSize)
     pretrain_iters = int(args.pretrainIters)
@@ -894,7 +909,7 @@ if __name__ == "__main__":
     RNN = recurrent.LSTM
     reverseUtt = True
     if args.acoustic:
-        METRIC = 'mse'
+        METRIC = 'mse1best'
     else:
         METRIC = "logprob"
     charDim = FRAME_SIZE if args.acoustic else len(chars)
@@ -1043,8 +1058,6 @@ if __name__ == "__main__":
 
     ## pretrain
     while iteration < pretrain_iters and pretrain:
-        print(iteration)
-        print()
         print('-' * 50)
         print('Iteration', iteration)
 
@@ -1078,7 +1091,8 @@ if __name__ == "__main__":
                 y_train = X_train[doc]
 
             print("Actual deleted chars from document %s:" %doc, deletedChars[doc].sum())
-            model.fit(X_train[doc], y_train, batch_size=BATCH_SIZE, nb_epoch=1)
+            pretrain_batch = 128 if args.acoustic else BATCH_SIZE
+            model.fit(X_train[doc], y_train, batch_size=pretrain_batch, nb_epoch=1)
 
             doc_ix += 1
             
@@ -1213,12 +1227,12 @@ if __name__ == "__main__":
                         #print((np.sum(loss + \
                         #                     DEL_WT * deleted + \
                         #                     ONE_LETTER_WT * oneLetter) + \
-                        #                     SEG_PENALTY * segs.sum())[None,...])
+                        #                     SEG_WT * segs.sum())[None,...])
                         #scores.append(np.ones((1)))
                         scores.append((np.sum(loss + \
                                              DEL_WT * deleted + \
                                              ONE_LETTER_WT * oneLetter) + \
-                                             SEG_PENALTY * segs.sum())[None,...])
+                                             SEG_WT * segs.sum())[None,...])
                         segSamples.append(np.resize(segs, (1, BATCH_SIZE)))
                     segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
                                                          metric=METRIC)

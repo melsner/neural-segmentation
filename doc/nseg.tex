@@ -54,7 +54,13 @@
 \maketitle
 
 \begin{abstract}
-Abstract is required.
+We propose a new unsupervised LSTM learner as a cognitive model of the acquisition of linguistic units from unsegmented input.
+Humans are known to abstract away from phonological detail in their encoding of linguistic input \cite{Baddeley74}.
+To model such working memory limitations in humans, our system uses encoder-decoder LSTMs with a small number of hidden units,
+then searches for a segmentation that minimizes decoder loss.
+Linguistically meaningful segments (e.g.\ words) should share regular patterns of features that facilitate decoder performance in comparison to random segmentations,
+and we show that our learner discovers these patterns when trained on both phoneme sequences and raw acoustics.
+To our knowledge, our system is the first to be able to segment both symbolic and acoustic representations of speech.
 \end{abstract}
 
 
