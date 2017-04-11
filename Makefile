@@ -10,6 +10,7 @@ BUILD := $(THISDIR)/build
 
 ZSPEECH-SAMPLE := $(foreach f, $(shell cat $(DATA)/sample_files.txt | paste -sd ' ' -), build/zerospeech/sample/$(f))
 ZSPEECH-ENGLISH := $(foreach f, $(shell cat $(DATA)/english_files.txt | paste -sd ' ' -), build/zerospeech/english/$(f))
+ZSPEECH-XITSONGA := $(foreach f, $(shell cat $(DATA)/xitsonga_files.txt | paste -sd ' ' -), build/zerospeech/xitsonga/$(f))
 
 ################################################################################
 #
@@ -54,9 +55,7 @@ LEXICONDISCOVERYDIR := $(shell cat $(CONFIG))
 ifeq (, $(firstword $(wildcard $(LEXICONDISCOVERYDIR))))
 $(error $(MSG1)$(CONFIG)$(MSG2)$(LEXICONDISCOVERYDIR)$(MSG3))
 endif
-endif
 
-ifndef MAKECONFIG
 CONFIG := $(CONFIGDIR)/user-buckeye-directory.txt
 ifeq (,$(firstword $(wildcard $(CONFIG))))
 $(info $(CONFIGWARN))
@@ -65,6 +64,16 @@ endif
 BUCKEYEDIR := $(shell cat $(CONFIG))
 ifeq (, $(firstword $(wildcard $(BUCKEYEDIR))))
 $(error $(MSG1)$(CONFIG)$(MSG2)$(BUCKEYEDIR)$(MSG3))
+endif
+
+CONFIG := $(CONFIGDIR)/user-xitsonga-directory.txt
+ifeq (,$(firstword $(wildcard $(CONFIG))))
+$(info $(CONFIGWARN))
+DUMMY := $(shell $(MAKE) $(CONFIG) MAKECONFIG=1)
+endif
+XITSONGADIR := $(shell cat $(CONFIG))
+ifeq (, $(firstword $(wildcard $(XITSONGADIR))))
+$(error $(MSG1)$(CONFIG)$(MSG2)$(XITSONGADIR)$(MSG3))
 endif
 endif
 
@@ -78,6 +87,9 @@ endif
 
 %/user-buckeye-directory.txt: | %
 	echo '../buckeye_speech_corpus' > $@
+
+%/user-xitsonga-directory.txt: | %
+	echo '../nchlt_tso/audio' > $@
 
 ################################################################################
 #
@@ -109,6 +121,10 @@ $(ZSPEECH-SAMPLE): $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(di
 $(ZSPEECH-ENGLISH): $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(dir $$@)
 	find $(word 1, $^) -name "$(notdir $@)" -type f -exec cp '{}' build/zerospeech/english/ \;
 
+.PRECIOUS: $(ZSPEECH-XITSONGA)
+$(ZSPEECH-XITSONGA): $(XITSONGADIR) $(CONFIGDIR)/user-xitsonga-directory.txt | $$(dir $$@)
+	find $(word 1, $^) -name "$(notdir $@)" -type f -exec cp '{}' build/zerospeech/xitsonga/ \;
+
 build/zerospeech/sample/wav-rspecifier.scp: $(ZSPEECH-SAMPLE)
 	rm -f $@
 	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(wav))' >> $@;)
@@ -122,6 +138,14 @@ build/zerospeech/english/wav-rspecifier.scp: $(ZSPEECH-ENGLISH)
 	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(wav))' >> $@;)
 	
 build/zerospeech/english/feats-wspecifier.scp: $(ZSPEECH-ENGLISH)
+	rm -f $@
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(basename $(wav)).mfcc)' >> $@;)
+	
+build/zerospeech/xitsonga/wav-rspecifier.scp: $(ZSPEECH-XITSONGA)
+	rm -f $@
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(wav))' >> $@;)
+	
+build/zerospeech/xitsonga/feats-wspecifier.scp: $(ZSPEECH-XITSONGA)
 	rm -f $@
 	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(basename $(wav)).mfcc)' >> $@;)
 	

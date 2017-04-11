@@ -300,7 +300,7 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
     #    print("contrib", wtSegs[si, 0])
 
     segWts = wtSegs.sum(axis=0)
-    best = segs[best_score] # segWts > .5
+    best = segWts > .5
 
     #print("        Difference between best sample and guessed best", np.sum(segs[best_score]-best))
     #print("        Total segmentations (best sample)", np.sum(segs[best_score]))
@@ -909,7 +909,7 @@ if __name__ == "__main__":
     RNN = recurrent.LSTM
     reverseUtt = True
     if args.acoustic:
-        METRIC = 'mse1best'
+        METRIC = 'mse'
     else:
         METRIC = "logprob"
     charDim = FRAME_SIZE if args.acoustic else len(chars)
