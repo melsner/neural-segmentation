@@ -54,13 +54,13 @@
 \maketitle
 
 \begin{abstract}
-We propose a new unsupervised LSTM learner as a cognitive model of the acquisition of linguistic units from unsegmented input.
-Cognitive biases toward phonological and syntactic predictability in speech are rooted in the limitations of human memory \cite{Baddeley85};
+We propose the first unsupervised LSTM speech segmenter as a cognitive model of the acquisition of words from unsegmented input.
+Cognitive biases toward phonological and syntactic predictability in speech are rooted in the limitations of human memory \cite{Baddeley98};
 compressed representations are easier to acquire and retain in memory.
-To model the biases introduced by these memory limitations, our system uses encoder-decoder LSTMs with a small number of hidden units,
+To model the biases introduced by these memory limitations, our system uses an LSTM-based encoder-decoder with a small number of hidden units,
 then searches for a segmentation that minimizes autoencoding loss.
 Linguistically meaningful segments (e.g.\ words) should share regular patterns of features that facilitate decoder performance in comparison to random segmentations,
-and we show that our learner discovers these patterns when trained on both phoneme sequences and raw acoustics.
+and we show that our learner discovers these patterns when trained on either phoneme sequences or raw acoustics.
 To our knowledge, ours is the first fully unsupervised system to be able to segment both symbolic and acoustic representations of speech.
 \end{abstract}
 

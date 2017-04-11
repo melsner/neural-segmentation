@@ -218,8 +218,26 @@ def lossByUtt(model, Xb, yb, BATCH_SIZE, metric="logprob"):
 def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
     #sample x utterance
 
-    if metric == "logprob":
-        scores = np.array(scores)
+    scores = np.array(scores)
+    
+    if metric == 'logprob':
+        MM = np.max(scores, axis=0, keepdims=True)
+        eScores = np.exp(scores - MM)
+        #approximately the probability of the sample given the data
+        pSeg = eScores / eScores.sum(axis=0, keepdims=True)
+        utt_selector = np.arange(pSeg.shape[0])
+        best = np.argmax(pSeg, axis=0)
+        bestSegs=[]
+        bestScore=0
+        bestProb=0
+        for ix in xrange(len(best)):
+            bestSegs.append(segs[best[ix]][ix,:])
+            bestScore += scores[best[ix],ix]
+            bestProb += pSeg[best[ix],ix]
+        bestProb /= len(best)
+        bestSegs = np.array(bestSegs)
+        print('      Best segmentation set: score = %s, prob = %s, num segs = %s' %(bestScore, bestProb, bestSegs.sum()))
+    elif metric == 'logprob1best':
         MM = np.max(scores, axis=0, keepdims=True)
         eScores = np.exp(scores - MM)
         #approximately the probability of the sample given the data
@@ -238,8 +256,6 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
         print('      Best segmentation set: score = %s, prob = %s, num segs = %s' %(bestScore, bestProb, bestSegs.sum()))
         return bestSegs, bestSegs
     elif metric == 'mse':
-        scores = np.array(scores)
-        #scores = scores / (np.std(scores, axis=0)/10)
         MM = np.max(-scores, axis=0, keepdims=True)
         eScores = np.exp(-scores - MM)
         #approximately the probability of the sample given the data
@@ -247,8 +263,6 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
         best_score = np.argmin(scores)
         print('      Best segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(best_score, scores[best_score][0], pSeg[best_score][0], segs[best_score].sum()))
     elif metric == 'mse1best':
-        scores = np.array(scores)
-        #scores = scores / (np.std(scores, axis=0)/10)
         MM = np.max(-scores, axis=0, keepdims=True)
         eScores = np.exp(-scores - MM)
         #approximately the probability of the sample given the data
@@ -278,7 +292,7 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
     #print("score distr:", dist[:10])
 
     #print("shape of segment matrix", segmat.shape)
-    #print("losses for utt 0", scores[:, 0])
+    #print("aeLosses for utt 0", scores[:, 0])
     #print("best score sample", np.argmax(-scores))
     #print("transformed losses for utt 0", eScores[:, 0])
     #print("best score sample", np.argmax(eScores))
@@ -1029,8 +1043,10 @@ if __name__ == "__main__":
         random_doc_list = obj['random_doc_list']
         doc_ix = obj['doc_ix']
         allBestSegs = obj.get('allBestSegs', None)
-        deletedChars = obj['deletedChars']
-        oneLetter = obj['oneLetter']
+        deletedChars = obj.get('deletedChars', None)
+        oneLetter = obj.get('oneLetter', None)
+        aeLosses = obj.get('aeLosses', None)
+
         reshuffle_doc_list=False
     else:
         print('No training checkpoint found. Starting training from beginning.')
@@ -1053,8 +1069,9 @@ if __name__ == "__main__":
     utt_lens = dict.fromkeys(doc_list)
     if deletedChars == None:
         deletedChars = dict.fromkeys(doc_list)
-    if oneLetter == None:
-        oneLetter = dict.fromkeys(doc_list)
+    oneLetter = dict.fromkeys(doc_list)
+    if aeLosses == None:
+        aeLosses = dict.fromkeys(doc_list)
 
     ## pretrain
     while iteration < pretrain_iters and pretrain:
@@ -1193,6 +1210,11 @@ if __name__ == "__main__":
                 s = 0
                 batch_ix = 0
                 while s < XC[doc].shape[0]:
+                    allBestSegs[doc] = np.zeros((0))
+                    deletedChars[doc] = 0
+                    oneLetter[doc] = 0
+                    aeLosses[doc] = 0
+
                     batch_ix += 1
                     print('  Batch %d. Starting at frame %d.' %(batch_ix,s))
                     s, e = batchFrameIndices(forced[doc], BATCH_SIZE, start_ix=s)
@@ -1212,7 +1234,7 @@ if __name__ == "__main__":
                     print('    Sampling and scoring segmentations.')
                     for sample in range(nSamples):
                         segs = np.resize(sampleFrameSegs(pSegs), BATCH_SIZE)
-                        X,deleted,oneLetter,batch_len_char = splitMFCCs(batch_in, segs, maxutt, maxlen, maxchar, FRAME_SIZE)
+                        X,deleted,onelet,batch_len_char = splitMFCCs(batch_in, segs, maxutt, maxlen, maxchar, FRAME_SIZE)
                         if reverseUtt:
                             y = X[:, ::-1, :]
                         else:
@@ -1231,7 +1253,7 @@ if __name__ == "__main__":
                         #scores.append(np.ones((1)))
                         scores.append((np.sum(loss + \
                                              DEL_WT * deleted + \
-                                             ONE_LETTER_WT * oneLetter) + \
+                                             ONE_LETTER_WT * onelet) + \
                                              SEG_WT * segs.sum())[None,...])
                         segSamples.append(np.resize(segs, (1, BATCH_SIZE)))
                     segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
@@ -1243,17 +1265,14 @@ if __name__ == "__main__":
                     #p[0, np.where(forced[doc][s:e])] = 1.
                     #bestSegs = sampleFrameSegs(p)
 
-                    X,deleted,oneLetter,batch_len_char = splitMFCCs(batch_in, np.squeeze(bestSegs),
+                    X,batch_deleted,batch_onelet,batch_len_char = splitMFCCs(batch_in, np.squeeze(bestSegs),
                                                         maxutt, maxlen, maxchar, FRAME_SIZE)
                     if reverseUtt:
                         y = X[:, ::-1, :]
                     else:
                         y = X
 
-                    if s == 0:
-                        allBestSegs[doc] = np.squeeze(bestSegs)[:e-s]
-                    else:
-                        allBestSegs[doc] = np.append(allBestSegs[doc],np.squeeze(bestSegs)[:e-s])
+                    allBestSegs[doc] = np.append(allBestSegs[doc],np.squeeze(bestSegs)[:e-s])
 
                     print('    Updating models.')
                     loss = model.train_on_batch(X, y)
@@ -1267,13 +1286,15 @@ if __name__ == "__main__":
                     #print("      First 10 segProbs:", segProbs[0,:10])
                     #print("      First 10 bestSegs:", bestSegs[0,:10])
                     #print("      First 10 segmenter probs:", segmenter_out[:10])
-                    epochLoss += loss[0]
-                    epochDel += deleted.sum()
-                    epochOneL += oneLetter.sum()
-                    epochSeg += bestSegs[:e-s].sum()
+                    aeLosses[doc] += loss[0]
+                    deletedChars[doc] += batch_deleted.sum()
+                    oneLetter[doc] += batch_onelet.sum()
 
                     s = e
-                epochLoss /= batch_ix
+                epochLoss = aeLosses[doc] / batch_ix
+                epochDel = deletedChars[doc]
+                epochOneL = oneLetter[doc]
+                epochSeg = allBestSegs[doc].sum()
 
                 timeSeg = frameSeg2timeSeg(intervals[doc],allBestSegs[doc])
 
@@ -1435,7 +1456,8 @@ if __name__ == "__main__":
                        'doc_ix': doc_ix,
                        'allBestSegs': allBestSegs,
                        'deletedChars': deletedChars,
-                       'oneLetter': oneLetter}
+                       'oneLetter': oneLetter,
+                       'aeLosses': aeLosses}
                 pickle.dump(obj, f)
 
 
