@@ -234,12 +234,12 @@ search errors.
 Neural nets, on the other hand, learn a non-linear mapping between
 input and output. This allows them to model speech more flexibly,
 outcompeting Gaussian/HMMs for supervised speech recognition
-\cite{xxx}. Recurrent neural nets also produce hidden representations
-differently than HMMs. Rather than use dynamic programming to search a
-latent space, they produce a single vector deterministically at each
-timestep. Models such as LSTMs \cite{Hochreiter97} can learn
-long-distance sequential dependencies in their input without making
-inference more expensive.
+\cite{Graves13,Hinton12}. Recurrent neural nets also produce hidden
+representations differently than HMMs. Rather than use dynamic
+programming to search a latent space, they produce a single vector
+deterministically at each timestep. Models such as LSTMs
+\cite{Hochreiter97} can learn long-distance sequential dependencies in
+their input without making inference more expensive.
 
 \subsection{Neural unsupervised learning}
 \label{sub-neural}
@@ -284,14 +284,17 @@ indirectness: there is no end-to-end objective to be optimized, and
 the system's lexical learning does not inform its phonetic
 representations.
 
-Even outside the domain of word learning, neural networks have been
+Even outside the domain of segmentation, neural networks have been
 most successful for supervised problems, and are not widely used for
 unsupervised learning of discrete structures (trees, clusters, segment
 boundaries). While some researchers have proposed
 information-theoretic objectives for learning clusters
 \cite{Klapper01}, the most widely used unsupervised objective is the
-one used here: autoencoding. Yet deriving discrete structures from an
-autoencoder has proven difficult \cite{has-anyone-done-it}.
+one used here: autoencoding. Yet autoencoders are rarely used to learn
+discrete hidden structures. One exception, \newcite{Socher11}, uses
+autencoders to find a latent tree structure for sentiment analysis by
+greedily merging adjacent nodes so as to minimize the reconstruction
+error.
 
 \newcite{Chung17} describe a model similar to our own which performs a
 segmentation task using autoencoders. Both models use multiscale
@@ -355,8 +358,8 @@ will be more likely if it appeared in samples with low reconstruction
 loss, especially if it is not encouraged by the current proposal.
 
 \begin{align}
-P(x|B_i) &= \frac{P(B_i|x)P(B_i)}{P(x)} \approx \frac{exp(L_i)}{\sum_j
-  exp(L_j)}
+P(x|B_i) &= \frac{P(B_i|x)P(B_i)}{P(x)} \approx \frac{\exp(L_i)}{\sum_j
+  \exp(L_j)}
 \label{eq-post}\\
 w_i^t &= \frac{P(x|B_i)}{P_{seg}^t(B_i^t)}
 \label{eq-wt}\\
