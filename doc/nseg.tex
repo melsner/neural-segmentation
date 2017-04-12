@@ -120,11 +120,12 @@ detail. Many cognitive models of the word learning problem draw on
 discover repeated patterns in phonemically transcribed input. Brent's
 model laid the groundwork for later generative models with more
 sophisticated prior distributions over word frequencies, co-occurrence
-statistics and phonological shapes \cite{xxx}. Other modeling
-architectures for segmentation have focused on detecting phonological
-boundaries between words using transitional probabilities \cite{xxx}
-or inducing words procedurally by ``subtracting'' known word forms
-from utterances \cite{Lignos11}.
+statistics and phonological shapes \cite[among
+  others]{Johnson09}. Other modeling architectures for segmentation
+have focused on detecting phonological boundaries between words using
+transitional probabilities \cite[among others]{Christiansen98} or
+inducing words procedurally by ``subtracting'' known word forms from
+utterances \cite{Lignos11}.
 
 All these modeling architectures are designed to work with
 phonemically transcribed input, and require some degree of
@@ -252,9 +253,9 @@ boundaries are used as distant supervision for the locations of word
 boundaries. While effective, this system uses symbolic rather than
 acoustic input. Moreover, it may have trouble with word endings which
 do not end utterances, such as the endings of function words;
-experiments show that infants do learn to recognize function words
-\cite{xxx} and use known words as ``anchors'' for segmentation within
-utterances \cite{Bortfeld05}.
+experiments show that infants learn detailed representations of
+function words by 13 months \cite{Shi06} and use known words as
+``anchors'' for segmentation within utterances \cite{Bortfeld05}.
 
 \newcite{Rytting07} adapts the Christiansen model to variable input by
 using the posterior probability distribution from a phone recognizer
@@ -394,14 +395,13 @@ Clipping creates the possibility of pathological outcomes where the
 system deliberately creates extremely long words, exploiting the fact
 that the excess characters will be discarded and will not have to be
 predicted in the output. We penalize this by subtracting 50 for each
-deleted character. Finally, we find that, despite pre-training of the
-phonological encodings, the system may settle into an initial state
-where the phonological network simply embeds the characters and the
-utterance network learns a character LM. To avoid this, we substract
-10 from the objective for each one-symbol word. These parameters were
-tuned only lightly; we increased the values until the problematic
-behavior (segmentation of the entire utterance as one word, or each
-character as a word) ceased.
+deleted character. Finally, we find that, despite pre-training, the
+system may settle into an initial state where the phonological network
+simply embeds the characters and the utterance network learns a
+character LM. To avoid this, we substract 10 from the objective for
+each one-symbol word. These parameters were tuned only lightly; we
+increased the values until the problematic behavior (segmentation of
+the entire utterance as one word, or each character as a word) ceased.
 
 We implemented the network in Keras \cite{Keras}, using Adam \cite{Kingma14}
 with default settings for optimization. We use mini-batches of 128 and
@@ -427,6 +427,9 @@ parameter tuning. Thus, we present results for the whole corpus (for
 comparison with previous work) and clean test results for the last
 1790.
 
+%$ python ~/research/neural-segmentation/script/plotTuning.py 
+%Best score at wd 0.25 cd 0.5 is 0.829736 at cell 2, 2
+
 We tune the four parameters of our system, $H_p, H_u, D_p$ and $D_u$,
 using a grid search. The results are shown in Figure
 \ref{fig-gridsearch}. Each subplot shows a particular dropout setting,
@@ -440,23 +443,46 @@ useful. For instance, compare the top left subplot, with 0 dropout and
 good performance with $H_p=20, H_u=100$, to subplot 3,3, with optimal
 performance at $H_p=80, H_d=200$. In other words, limiting the
 system's memory resources is indeed the key to its performance. The
-best score occurs at \xxx{where} with dev score \xxx{what}.
+best score occurs at $H_p=80, H_u=400, D_p=0.5, D_u=0.25$ with a dev
+boundary F-score of 83\%.
+
+To further demonstrate that limited memory can bias the network to
+learn a low-entropy lexicon, we perform a separate experiment using
+the phonological encoder/decoder alone. We create networks with
+varying $H_p$ (setting $D_p$ to 0); for each network size, we train
+one net on real words from the gold segmentation of Brent, and another
+on length-matched pseudowords sampled by randomly segmenting the Brent
+corpus. Figure \ref{fig-capacity} shows the reconstruction error rates
+as a function of $H_p$. The gap between the green and orange lines
+shows the difference in reconstruction error obtained by using real
+words rather than pseudowords. For the smallest $H_p$, neither network
+does a good job; for the largest, both networks learn the sequences
+perfectly. For values in between, however, the lines are relatively
+far apart, showing that the real words are easier for the network to
+remember.
 
 \begin{figure}
-\includegraphics[width=\columnwidth]{heatmap.png}
+\includegraphics[width=\columnwidth]{heatmap.pdf}
 \caption{Tuning results on Brent development. Cell axes represent
-  $H_u$ and $H_p$, darker cells have higher scores. \xxx{replot when
-    blank is filled}}
+  $H_u$ and $H_p$, darker cells have higher scores (best 83\%, worst
+  60\%).}
 \label{fig-gridsearch}
 \end{figure}
 
+\begin{figure}
+\includegraphics[width=\columnwidth]{capacity.pdf}
+\caption{Reconstruction accuracy of the phonological encoder/decoder
+  on real words vs. length-matched pseudowords from Brent.}
+\label{fig-capacity}
+\end{figure}
+
 Our results for Brent, along with selected comparisons, are shown in
-Table \ref{tab-results}\footnote{Comparison system scores are those
+Table \ref{tab-results}.\footnote{Comparison system scores are those
   reported in their respective publications, except for
   \newcite{Goldwater09}, which are corrected numbers published with
   their software release. Not all systems report all metrics.} Our
 system performs at the lower end of the reported range for Brent
-segmenters, scoring XX\% for boundary detection and XX\% for word
+segmenters, scoring 83\% for boundary detection and 72\% for word
 detection (comparable to \cite{Fleck08}). (\newcite{Lignos11} scores
 93\% boundary F on a different corpus with marked syllable
 boundaries.) From a cognitive modeling point of view, it is not clear

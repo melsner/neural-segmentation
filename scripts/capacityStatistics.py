@@ -126,8 +126,10 @@ if __name__ == "__main__":
     LAYERS = 1
 
     for hidden in [10, 20, 40, 80, 160]:
-        modReal = buildCharEncDec(hidden, RNN, LAYERS, maxlen, chars)
-        modPseud = buildCharEncDec(hidden, RNN, LAYERS, maxlen, chars)
+        modReal = buildCharEncDec(hidden, RNN, LAYERS, maxlen, chars,
+                                  dropout=0)
+        modPseud = buildCharEncDec(hidden, RNN, LAYERS, maxlen, chars,
+                                   dropout=0)
 
         for iteration in range(1, 20):
             print()
