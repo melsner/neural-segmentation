@@ -879,6 +879,10 @@ if __name__ == "__main__":
         mfccs, FRAME_SIZE = readMFCCs(path)
         mfccs = filterMFCCs(mfccs, intervals, segs_init, FRAME_SIZE)
         doc_list = sorted(list(mfccs.keys()))
+        frame_cts = {}
+        for doc in mfccs:
+            frame_cts[doc] = mfccs[doc].shape[0]
+        total_frames = sum([frame_cts[doc] for doc in frame_cts])
 
         if text['wrd']:
             print('Initial word segmentation scores:')
@@ -1209,12 +1213,12 @@ if __name__ == "__main__":
             if args.acoustic: # Don't batch by utt
                 s = 0
                 batch_ix = 0
-                while s < XC[doc].shape[0]:
-                    allBestSegs[doc] = np.zeros((0))
-                    deletedChars[doc] = 0
-                    oneLetter[doc] = 0
-                    aeLosses[doc] = 0
+                allBestSegs[doc] = np.zeros((0))
+                deletedChars[doc] = 0
+                oneLetter[doc] = 0
+                aeLosses[doc] = 0
 
+                while s < XC[doc].shape[0]:
                     batch_ix += 1
                     print('  Batch %d. Starting at frame %d.' %(batch_ix,s))
                     s, e = batchFrameIndices(forced[doc], BATCH_SIZE, start_ix=s)
@@ -1291,13 +1295,26 @@ if __name__ == "__main__":
                     oneLetter[doc] += batch_onelet.sum()
 
                     s = e
-                epochLoss = aeLosses[doc] / batch_ix
-                epochDel = deletedChars[doc]
-                epochOneL = oneLetter[doc]
-                epochSeg = allBestSegs[doc].sum()
+
+                docLoss = aeLosses[doc] / batch_ix
+                docDel = deletedChars[doc]
+                docOneL = oneLetter[doc]
+                docSeg = allBestSegs[doc].sum()
+                
+                epochLoss += docLoss
+                epochDel += docDel
+                epochOneL += docOneL
+                epochSeg += docSeg
 
                 timeSeg = frameSeg2timeSeg(intervals[doc],allBestSegs[doc])
 
+                print()
+                print('Document "%s"' %doc)
+                print('Num frames = %s' %frame_cts[doc])
+                print('Loss = %s' %docLoss)
+                print('Del = %s' %docDel)
+                print('One Letter = %s' %docOneL)
+                print('Num segs = %s' %docSeg)
                 if args.goldwrd:
                     segScores['wrd'][doc] = getSegScore(text['wrd'][doc], timeSeg)
                     (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = segScores['wrd'][doc]
@@ -1316,6 +1333,7 @@ if __name__ == "__main__":
                     segScores['phn']['##overall##'] = [(bm_tot, ba_tot, bP_tot), None, (swm_tot, swa_tot, swP_tot), None]
                     print('Phone segmentation score:')
                     printSegScore(segScores['phn'][doc], doc, args.acoustic)
+                print()
 
             else:
                 for batch, inds in enumerate(batchIndices(X_train[doc], BATCH_SIZE)):
@@ -1467,7 +1485,8 @@ if __name__ == "__main__":
 
         t1 = time.time()
         print("Iteration total time: %ds" %(t1-t0))
-        print("Loss:", epochLoss)
+        print('Total frames:', total_frames)
+        print("Loss:", epochLoss/(len(mfccs)-1))
         print("Deletions:", epochDel)
         print("One letter words:", epochOneL)
         print("Total segmentation points:", epochSeg)

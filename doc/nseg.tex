@@ -98,7 +98,18 @@ well-understood autoencoder objective to perform the segmentation task
 without requiring auxiliary clustering, and thus suggests a new
 direction for neural unsupervised learning.
 
-\xxx{SAY SOMETHING ABOUT OUR RESULTS}
+In an experiment conducted on the widely used Brent corpus \cite{Brent99}, our system achieves performance close to that of \newcite{Goldwater09}, although subsequent systems outperform ours by a wider margin. 
+We show that memory limitations do indeed drive the performance of the system, with smaller LSTM hidden states outperforming larger ones in the development set.
+
+In a follow-up experiment designed to explore the flexibility of our model, we deploy the segmenter on acoustic input: the English portion of the Zerospeech 2015 challenge \cite{Versteegh15}.
+Our model outperforms the winning model from that challenge \cite{Rasanen15}, although we underperform more recent unsupervised acoustic segmentation systems \cite{Kamper16,RasanenND}.
+
+To our knowledge, our system is the first unsupervised LSTM speech segmenter, as well as the first unsupervised speech segmenter to succeed on both symbolic and acoustic representations of speech.
+Our results are of note for several reasons.
+First, they provide modeling support for the claim that memory limitations encourage lexical acquisition.
+Second, they show that a general strategy of searching for maximally compressible representations can realistically guide lexical acquisition without explicit reference to perceptual biases \cite[c.f\ e.g.][]{Rasanen15}, regardless of input representation.
+And third, they demonstrate the benefits of our adaptation of neural sequence modeling to unsupervised learning.
+
 
 \section{Motivations}
 
@@ -150,6 +161,8 @@ this model, listeners can store the last few items they heard in a
 \textit{phonological loop}, from which words are transferred into
 episodic memory which represents them at a syntactic/semantic level.
 
+
+%CS: is this par necessary?
 Evidence for the phonological loop comes from studies of second
 language learning. Forcing subjects to articulate a known word like
 ``the'' (thus occupying their phonological memory) prevents them from
@@ -257,7 +270,7 @@ lexical items.
 
 Recent work \cite{Kamper16} has attempted to harness the flexibility
 of neural feature extractors within the generative model
-framework. This models has a hybrid architecture consisting of a
+framework. This model has a hybrid architecture consisting of a
 pretrained neural feature extractor, the Correspondence Autoencoder,
 using distant supervision \cite{Kamper15}, and a Bayesian
 clustering/segmentation model. The system represents each word by
@@ -390,7 +403,7 @@ tuned only lightly; we increased the values until the problematic
 behavior (segmentation of the entire utterance as one word, or each
 character as a word) ceased.
 
-We implemented the network in Keras \cite{Keras}, using Adam \cite{xxx}
+We implemented the network in Keras \cite{Keras}, using Adam \cite{Kingma14}
 with default settings for optimization. We use mini-batches of 128 and
 take 100 samples of potential segment boundaries per sequence. We
 perform 10 iterations of pretraining with random boundaries, 10
@@ -491,6 +504,56 @@ the infant data \cite{Bortfeld05}.
 \caption{Learning curve: metrics over time on the Brent dataset.}
 \label{fig-learning-curve}
 \end{figure}
+
+\section{Follow-up study: Zerospeech 2015 acoustic segmentation}
+
+We began by claiming that an advantage of our model was its flexible architecture that permits dense acoustic features as input (rather than symbolic phone labels) with little modification.
+In this section, we present priliminary results from a follow-up experiment in which we tested this claim by deploying our system as an acoustic segmenter on the English portion of the Zerospeech 2015 challenge dataset \cite{Versteegh15}.
+We preprocessed the raw acoustic data by extracting 25ms 13-dimensional mel frequency cepstral coefficients with first and second order deltas at a step size of 10ms.
+The resulting sequences of 39-dimensional frames were fed into the network as ``characters.''
+
+Given that the goal of the experiment was to test the existing architecture on a novel task, we intentionally conducted this experiment with minimal parameter tuning or architectural modification.
+However, we made several key changes in response to the unique challenges presented by acoustic input.
+
+First, since we are now reconstructing dense vectors of acoustic features, we use mean squared error (MSE) instead of categorical cross-entropy as the autoencoder loss function.
+We consequently rescaled our clipping penalty from 50 to 1, a coefficient which seemed more in balance with the variation in decoder loss produced by MSE.
+We also upscaled our one-letter penalty from 10 to 50, modeling our strong prior assumption that a 1-frame segment will never correspond to a word.
+
+Second, in contrast to the phoneme sequences in the Brent corpus discussed above, utterance boundaries are not observed in acoustic input.
+In order to run the two-level autoencoder, the input must somehow be organized into sequences of utterances.
+We therefore inferred utterance boundaries by first segmenting the data into words according to the proposal distribution, then consuming those words one-by-one up to the maximum utterance length (in frames).
+The aforementioned clipping penalties punish the system for utterances that contain too many words, preventing it from optimizing its autoencoder loss by segmenting everywhere.
+
+Third, for our initial proposal distribution we used the speech region segmentation provided by the Zerospeech challenge, consisting of speech intervals identified through automatic voice activity detection (VAD), rather than using the uniform initialization described above for symbolic mode.
+We interpolated the initial distribution with a uniform prior as described above.
+
+Fourth, we discovered in practice that the assumption of independence between samples made by the importance scoring scheme as implemented for symbolic mode was distortionary in acoustic mode, such that the ``best'' segmentation discovered through sampling often contained many times more segments than any of its component samples.\footnote{We believe this is driven by training batches in which multiple samples receive similar scores but have fairly non-overlapping segmentations.
+In this case, the output segmentation can contain something close to the union of the best samples' segmentation points, leading to oversegmentation.
+This effect is likely exaggerated in acoustic mode as compared to symbolic mode because acoustic word segments are generally much longer (in frames) than their corresponding symbolic word segments (in characters).}
+To prevent this from happening, we simply used 1-best rather than importance sampling for acoustic segmentation.
+
+\begin{table}
+\begin{tabular}{p{2.1cm}cccc}
+System & Bd P & Bd R & Bd F & Wd F\\
+\hline
+Lyzinski 15           & 18.8 & 64.0 & 29.0 & 2.4\\
+R\"{a}s\"{a}nen 15       & 75.7 & 33.7 & 46.7 & 9.6\\
+R\"{a}s\"{a}nen revised       & 61.1 & 50.1 & 55.2 & 12.4\\
+Kamper 16       & 66.5 & 58.8 & 62.4 & 20.6\\
+\hline
+Ours & 57.8 & 42.2 & 48.8 & 8.7\\
+\end{tabular}
+\caption{Selected word segmentation results on the the Zerospeech 2015 English corpus.}
+\label{tab-acoust-results}
+\end{table}
+
+Results from the acoustic segmentation task are presented in Table~\ref{tab-acoust-results}, along with a comparison to results from other systems.
+\newcite{Lyzinski15} and \newcite{Rasanen15} were entrants in the Zerospeech 2015 challenge, in which \cite{Rasanen15} performed best in the word boundary detection measure.
+As shown in the table, our system outperforms both of these competitors.
+However, since the challenge concluded, \newcite{RasanenND} have modified their system and improved their segmentation score, and \newcite{Kamper16} have established a new state of the art for this task.
+While our system currently remains far from these newer benchmarks, we expect that with systematic parameter tuning and investigation into appropriate sampling procedures for acoustic input, we might be able to improve substantially on the results presented here.
+We believe that the results of this preliminary investigation into the acoustic domain are promising, and that they bear out our claims about the flexibility of our general architecture.
+
 
 \section{Conclusions}
 
