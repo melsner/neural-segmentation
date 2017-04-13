@@ -107,7 +107,7 @@ Our model outperforms the winning model from that challenge \cite{Rasanen15}, al
 To our knowledge, our system is the first unsupervised LSTM speech segmenter, as well as the first unsupervised speech segmenter to succeed on both symbolic and acoustic representations of speech.
 Our results are of note for several reasons.
 First, they provide modeling support for the claim that memory limitations encourage lexical acquisition.
-Second, they show that a general strategy of searching for maximally compressible representations can realistically guide lexical acquisition without explicit reference to perceptual biases \cite[c.f\ e.g.][]{Rasanen15}, regardless of input representation.
+Second, they show that a general strategy of searching for maximally compressible representations can realistically guide lexical acquisition without explicit reference to perceptual biases \cite[c.f.\ e.g.][]{Rasanen15}, regardless of input representation.
 And third, they demonstrate the benefits of our adaptation of neural sequence modeling to unsupervised learning.
 
 
@@ -177,7 +177,7 @@ represents them at a syntactic/semantic level.
 %% sentences, they remember which ideas they heard, but not the form in
 %% which they were expressed \cite{Bransford71}.
 
-\newcite{Baddeley98} claims that the phonological loop functions in
+\newcite{Baddeley98} claim that the phonological loop functions in
 word \textit{learning} as well as processing by proficient listeners,
 aiding in the acquisition of unfamiliar words. They summarize a number
 of studies showing that the vocabulary size of typically developing
@@ -218,7 +218,7 @@ Learning such a mapping can be problematic. Traditional generative
 learning models use parametric distributions over the data--- for
 acoustics, Gaussians \cite{Vallabha07,Feldman09} or Gaussian-HMMs
 \cite{Lee12,Lee15}. But these are a notoriously poor fit to real speech sounds
-\cite{Glass?}.
+\cite{Glass03}.
 
 An example of an alternative approach to representation learning from acoustics is \newcite{Rasanen15}.
 They exploit known acoustic indicators of syllable boundaries to infer syllable segments, cluster those segments using expectation-maximization (EM), and then identify multisyllabic words by searching for recurring cluster \textit{n}-grams.
@@ -606,18 +606,19 @@ R\"{a}s\"{a}nen 15       & 75.7 & 33.7 & 46.7 & 9.6\\
 R\"{a}s\"{a}nen new       & 61.1 & 50.1 & 55.2 & 12.4\\
 Kamper 16       & 66.5 & 58.8 & 62.4 & 20.6\\
 \hline
-Ours & 61.6 & 43.5 & 51.0 & 9.7\\
+Ours & 63.4 & 43.0 & 51.2 & 9.5\\
 \end{tabular}
 \caption{Selected word segmentation results on the the Zerospeech 2015 English corpus.}
 \label{tab-acoust-results}
 \end{table}
 
-Results from the acoustic segmentation task are presented in
+We trained the system for 70 iterations using parameters $H_p=20, H_u=400,
+D_p=0, D_u=0.25$. Results are presented in
 Table~\ref{tab-acoust-results}, along with a comparison to results
 from other systems.  \newcite{Lyzinski15} and \newcite{Rasanen15} were
-entrants in the Zerospeech 2015 challenge, in which \cite{Rasanen15}
+entrants in the Zerospeech 2015 challenge, in which \newcite{Rasanen15}
 performed best in the word boundary detection measure.  As shown in
-the table, our system outperforms both of these competitors.  However,
+the table, our system beats both of these competitors' boundary detection scores, with a word detection score comparable to that of \newcite{Rasanen15}.  However,
 since the challenge concluded, \newcite{RasanenND} have modified their
 system and improved their segmentation score,\footnote{The new results
   are not yet published. Those reported above are copied from the
@@ -641,7 +642,7 @@ And by successfully deploying our system on both symbolic (character) and acoust
 
 In the future we hope to pursue a number of lines of inquiry.
 We plan to conduct more detailed parameter tuning in the acoustic domain and to segment the Xitsonga dataset supplied with the Zerospeech 2015 challenge.
-We also intend to introduce additional layers into the autoencoder network so as to allow to jointly acquire phone-like, morph-like, and/or word-like units in the acoustic signal.
+We also intend to introduce additional layers into the autoencoder network so as to allow for joint acquisition of phone-like, morph-like, and/or word-like units in the acoustic signal.
 And we plan to explore clustering techniques that would allow our system to discover categories in addition to probable segmentation points.
 
 %% \section*{Acknowledgments}

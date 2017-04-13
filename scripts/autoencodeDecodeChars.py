@@ -262,6 +262,8 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
         pSeg = eScores / eScores.sum(axis=0, keepdims=True)
         best_score = np.argmin(scores)
         print('      Best segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(best_score, scores[best_score][0], pSeg[best_score][0], segs[best_score].sum()))
+        worst_score = np.argmax(scores)
+        print('      Worst segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(worst_score, scores[worst_score][0], pSeg[worst_score][0], segs[worst_score].sum()))
     elif metric == 'mse1best':
         MM = np.max(-scores, axis=0, keepdims=True)
         eScores = np.exp(-scores - MM)
@@ -1119,6 +1121,7 @@ if __name__ == "__main__":
         allBestSegs = None
         deletedChars = None
         oneLetter = None
+        aeLosses = None
         reshuffle_doc_list=True
 
     print()
@@ -1173,7 +1176,7 @@ if __name__ == "__main__":
                 y_train = X_train[doc]
 
             print("Actual deleted chars from document %s:" %doc, deletedChars[doc].sum())
-            pretrain_batch = 128 if args.acoustic else BATCH_SIZE
+            pretrain_batch = 16 if args.acoustic else BATCH_SIZE
             model.fit(X_train[doc], y_train, batch_size=pretrain_batch, nb_epoch=1)
 
             doc_ix += 1
@@ -1548,12 +1551,14 @@ if __name__ == "__main__":
 
         t1 = time.time()
         print("Iteration total time: %ds" %(t1-t0))
-        print('Total frames:', total_frames)
-        print("Loss:", epochLoss/(len(mfccs)-1))
+        if args.acoustic:
+            print('Total frames:', total_frames)
+            epochLoss /= len(mfccs) - 1
+        print("Loss:", epochLoss)
         print("Deletions:", epochDel)
         print("One letter words:", epochOneL)
         print("Total segmentation points:", epochSeg)
-        segScore = writeLog(iteration, epochLoss/(len(mfccs)-1), epochDel, epochOneL, epochSeg, 
+        segScore = writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, 
                  text, allBestSegs, logdir, intervals, args.acoustic, print_headers=iteration==0)
         if args.acoustic:
             if text['wrd']:
