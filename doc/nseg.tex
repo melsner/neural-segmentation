@@ -98,7 +98,7 @@ well-understood autoencoder objective to perform the segmentation task
 without requiring auxiliary clustering, and thus suggests a new
 direction for neural unsupervised learning.
 
-In an experiment conducted on the widely used Brent corpus \cite{Brent99}, our system achieves performance close to that of \newcite{Goldwater09}, although subsequent systems outperform ours by a wider margin. 
+In an experiment conducted on the widely used Brent corpus \cite{Brent99}, our system achieves performance close to that of \newcite{Fleck08}, although subsequent systems outperform ours by a wider margin. 
 We show that memory limitations do indeed drive the performance of the system, with smaller LSTM hidden states outperforming larger ones in the development set.
 
 In a follow-up experiment designed to explore the flexibility of our model, we deploy the segmenter on acoustic input: the English portion of the Zerospeech 2015 challenge \cite{Versteegh15}.
@@ -142,7 +142,7 @@ recognizer). Transition-based models are fairly robust to variation in
 the symbols \cite{Rytting07,Rytting08,Daland10,Fleck08} and can be relatively
 successful in this framework. Extensions using neural nets
 \cite{Christiansen98,Rytting08} are discussed in more detail below
-(subsec. \ref{sub-neural}. \newcite{Lignos11} requires the most
+(subsec. \ref{sub-neural}). \newcite{Lignos11} requires the most
 complex preprocessing of the input (segmentation into syllables, with
 marked lexical stresses); adapting it to noisy input is an open
 problem.
@@ -152,30 +152,30 @@ problem.
 Cognitive models of word segmentation rely on two kinds of learning
 biases to structure their inferred lexicons: predictability within
 words (often expressed as a prior over phonological forms), and
-Zipfian predictable unigram and bigram frequencies between words (a
-prior over word distributions). These biases control the entropy of
-utterances, making it easy for adult listeners to remember what they
-hear and reconstruct any missing parts from context
-\cite{Piantadosi12}. These biases correspond to different components
-in a standard model of working memory \cite{Baddeley07,Baddeley74}. In
-this model, listeners can store the last few items they heard in a
-\textit{phonological loop}, from which words are transferred into
-episodic memory which represents them at a syntactic/semantic level.
+Zipfian unigram and bigram frequencies of words (a prior over word
+distributions). These biases control the entropy of utterances, making
+it easy for adult listeners to remember what they hear and reconstruct
+any missing parts from context \cite{Piantadosi12}. The biases
+correspond to different components in a standard model of working
+memory \cite{Baddeley07,Baddeley74}. In this model, listeners can
+store the last few items they heard in a \textit{phonological loop},
+from which words are transferred into \textit{episodic memory} which
+represents them at a syntactic/semantic level.
 
 
 %CS: is this par necessary?
-Evidence for the phonological loop comes from studies of second
-language learning. Forcing subjects to articulate a known word like
-``the'' (thus occupying their phonological memory) prevents them from
-remembering foreign-language words, but does not prevent them from
-learning new associations for known, native-language words. This
-suggests a dissociation between phonological and semantic memory,
-which explains why subjects have a greater capacity to recall
-connected sentences than strings of random words or syllables:
-Sentences are encoded using episodic memory rather than at the
-phonological level. When subjects make errors in reconstructing
-sentences, they remember which ideas they heard, but not the form in
-which they were expressed \cite{Bransford71}.
+%% Evidence for the phonological loop comes from studies of second
+%% language learning. Forcing subjects to articulate a known word like
+%% ``the'' (thus occupying their phonological memory) prevents them from
+%% remembering foreign-language words, but does not prevent them from
+%% learning new associations for known, native-language words. This
+%% suggests a dissociation between phonological and semantic memory,
+%% which explains why subjects have a greater capacity to recall
+%% connected sentences than strings of random words or syllables:
+%% Sentences are encoded using episodic memory rather than at the
+%% phonological level. When subjects make errors in reconstructing
+%% sentences, they remember which ideas they heard, but not the form in
+%% which they were expressed \cite{Bransford71}.
 
 \newcite{Baddeley98} claims that the phonological loop functions in
 word \textit{learning} as well as processing by proficient listeners,
@@ -185,25 +185,24 @@ infants correlates with their ability to remember a sequence of
 phonologically plausible non-words, a test of phonological loop
 capacity. Children with Specific Language Impairment, meanwhile,
 remember non-words poorly, a deficit which may contribute to their
-atypically small vocabularies. They argue that the ability to remember
-an unfamiliar phonological form in the short term is essential if it
-is to be transferred to long-term memory as a datapoint for lexical
-learning. This account of word learning is one of a growing number
-which attempt to unify acquisition and speech processing in terms of
-the same real-time, resource-constrained mechanisms
-\cite{Apfelbaum16}.
+atypically small vocabularies. \newcite{Baddeley98} argue that the
+ability to remember an unfamiliar phonological form in the short term
+is essential if it is to be transferred to long-term memory as a
+datapoint for lexical learning. This account of word learning is one
+of a growing number which attempt to unify acquisition and speech
+processing in terms of the same real-time, resource-constrained
+mechanisms \cite{Apfelbaum16}.
 
 In our model, memorization itself can be viewed as the objective for
 early word learning. The model attempts to reconstruct its input from
 memory; chunks that are easy to reconstruct (and that make the context
 reconstructible) are good candidate words. The working memory model
 accounts for the two types of bias normally found in Bayesian
-segmenters. Phonological predictability due to consistent stress
-\cite{Boerschinger14} and segmental patterns \cite{Johnson09} reduces
-the load on the phonological loop.  Predictability between words
-reduces the load on syntactic memory. The two memory systems draw on
-different cognitive resources, which correspond to different
-parameters of the model.
+segmenters. Phonological predictability due to consistent word shapes
+\cite{Boerschinger14,Johnson09} reduces the load on the phonological
+loop.  Predictability between words reduces the load on syntactic
+memory. The two memory systems draw on different cognitive resources,
+which correspond to different parameters of the model.
 
 \subsection{Input representations}
 \label{sub-representations}
@@ -277,9 +276,9 @@ lexical items.
 
 Recent work \cite{Kamper16} has attempted to harness the flexibility
 of neural feature extractors within the generative model
-framework. This model has a hybrid architecture consisting of a
-pretrained neural feature extractor, the Correspondence Autoencoder,
-using distant supervision \cite{Kamper15}, and a Bayesian
+framework. This model has a hybrid architecture consisting of a neural
+feature extractor, the Correspondence Autoencoder, pretrained using
+distant supervision \cite{Kamper15}, and a Bayesian
 clustering/segmentation model. The system represents each word by
 neurally encoding its frames, then downsampling to obtain a
 fixed-dimensional word vector; the clustering model assumes that these
@@ -440,20 +439,19 @@ comparison with previous work) and clean test results for the last
 %Best score at wd 0.25 cd 0.5 is 0.829736 at cell 2, 2
 
 We tune the four parameters of our system, $H_p, H_u, D_p$ and $D_u$,
-using a grid search. The results are shown in Figure
-\ref{fig-gridsearch}. Each subplot shows a particular dropout setting,
-$D_p/D_u$; the cells within represent settings of $H_p$ (rows) and
-$H_u$ (columns), where darker cells have higher boundary
-F-score. Excessive noise decreases scores, especially high word
-dropout (right side of the plot). For low levels of dropout, the best
-systems tend to have small numbers of hidden units (dark regions in
-the lower left); for larger dropout, more hidden units can be
-useful. For instance, compare the top left subplot, with 0 dropout and
-good performance with $H_p=20, H_u=100$, to subplot 3,3, with optimal
-performance at $H_p=80, H_d=200$. In other words, limiting the
-system's memory resources is indeed the key to its performance. The
-best score occurs at $H_p=80, H_u=400, D_p=0.5, D_u=0.25$ with a dev
-boundary F-score of 83\%.
+using a grid search (see Figure \ref{fig-gridsearch}). Each subplot
+shows a particular dropout setting, $D_p/D_u$; the cells within
+represent settings of $H_p$ (rows) and $H_u$ (columns), where darker
+cells have higher boundary F-score. Excessive noise decreases scores,
+especially high word dropout (right side of the plot). For low levels
+of dropout, the best systems tend to have small numbers of hidden
+units (dark regions in the lower left); for larger dropout, more
+hidden units can be useful. For instance, compare the top left
+subplot, with 0 dropout and good performance with $H_p=20, H_u=100$,
+to subplot 3,3, with optimal performance at $H_p=80, H_d=200$. In
+other words, limiting the system's memory resources is indeed the key
+to its performance. The best score occurs at $H_p=80, H_u=400,
+D_p=0.5, D_u=0.25$ with a dev boundary F-score of 83\%.
 
 To further demonstrate that limited memory can bias the network to
 learn a low-entropy lexicon, we perform a separate experiment using
@@ -520,7 +518,7 @@ Fleck 08           & 95 & 74 & 83 & 71\\
 Ours (all) & 81 & 85 & 83 & 72\\
 Ours (test) & 81 & 86 & 83 & 72\\
 \end{tabular}
-\caption{Selected word segmentation results on the Brent corpus.}
+\caption{Selected segmentation results on Brent.}
 \label{tab-results}
 \end{table}
 
@@ -536,36 +534,68 @@ the infant data \cite{Bortfeld05}.
 
 \begin{figure}
 \includegraphics[width=\columnwidth]{learning-curve.pdf}
-\caption{Learning curve: metrics over time on the Brent dataset.}
+\caption{Learning curve on the Brent dataset.}
 \label{fig-learning-curve}
 \end{figure}
 
-\section{Follow-up study: Zerospeech 2015 acoustic segmentation}
+\subsection{Zerospeech 2015 acoustic segmentation}
 
-We began by claiming that an advantage of our model was its flexible architecture that permits dense acoustic features as input (rather than symbolic phone labels) with little modification.
-In this section, we present priliminary results from a follow-up experiment in which we tested this claim by deploying our system as an acoustic segmenter on the English portion of the Zerospeech 2015 challenge dataset \cite{Versteegh15}.
-We preprocessed the raw acoustic data by extracting 25ms 13-dimensional mel frequency cepstral coefficients with first and second order deltas at a step size of 10ms.
-We then trained the network on the resulting sequences of 39-dimensional frames.
+We began by claiming that an advantage of our model was its flexible
+architecture that permits dense acoustic features as input (rather
+than symbolic phone labels) with little modification.  In this
+section, we present preliminary results from a follow-up experiment in
+which we tested this claim by deploying our system as an acoustic
+segmenter on the English portion of the Zerospeech 2015 challenge
+dataset \cite{Versteegh15}.  We preprocess the raw acoustic data by
+extracting 25ms 13-dimensional mel frequency cepstral coefficients
+with first and second order deltas at a step size of 10ms.  We then
+train the network on the resulting sequences of 39-dimensional
+frames.
 
 Given that the goal of the experiment was to test the existing architecture on a novel task, we intentionally conducted this experiment with minimal parameter tuning or architectural modification.
 However, we made several key changes in response to the unique challenges presented by acoustic input.
 
-First, since we are now reconstructing dense vectors of acoustic features, we use mean squared error (MSE) instead of categorical cross-entropy as the autoencoder loss function.
-We consequently rescaled our clipping penalty from 50 to 1, a coefficient which seemed more in balance with the variation in decoder loss produced by MSE.
-We also upscaled our one-letter penalty from 10 to 50, modeling our strong prior assumption that a 1-frame segment will never correspond to a word.
+First, since we are now reconstructing dense vectors of acoustic
+features, we use mean squared error (MSE) instead of categorical
+cross-entropy as the autoencoder loss function.  We consequently
+rescale our clipping penalty from 50 to 1, a coefficient which seemed
+more in balance with the variation in decoder loss produced by MSE.
+We also increase our one-letter penalty from 10 to 50, modeling our
+strong prior assumption that a 1-frame segment will never correspond
+to a word.
 
-Second, in contrast to the phoneme sequences in the Brent corpus discussed above, utterance boundaries are not observed in acoustic input.
-In order to run the two-level autoencoder, the input must somehow be organized into sequences of utterances.
-We imposed utterance boundaries by iteratively consuming the next discovered word in the time series up to the maximum utterance length (in frames).
-The aforementioned clipping penalties punish the system for utterances that contain too many words, preventing it from optimizing its autoencoder loss by segmenting everywhere.
+Second, in contrast to the phoneme sequences in the Brent corpus
+discussed above, utterance boundaries are not observed in acoustic
+input.  The input to the two-level autoencoder must be divided into
+sequences of utterances, so we imposed utterance boundaries by
+iteratively consuming the next discovered word in the time series up
+to the maximum utterance length (in frames).  The aforementioned
+clipping penalties punish the system for utterances that contain too
+many words, preventing it from optimizing its autoencoder loss by
+segmenting everywhere.
 
-Third, for our initial proposal distribution we used the speech region segmentation provided by the Zerospeech challenge, consisting of speech intervals identified through automatic voice activity detection (VAD), rather than using the uniform initialization described above for symbolic mode.
-We interpolated the initial distribution with a uniform prior as described above.
+Third, for our initial proposal distribution we use the speech region
+segmentation provided by the Zerospeech challenge, consisting of
+speech intervals identified through automatic voice activity detection
+(VAD), rather than using the uniform initialization described above
+for symbolic mode.  We interpolate the initial distribution with a
+uniform prior as described above.
 
-Fourth, we discovered in practice that the assumption of independence between samples made by the importance scoring scheme as implemented for symbolic mode was distortionary in acoustic mode, such that the ``best'' segmentation discovered through sampling often contained many times more segments than any of its component samples.\footnote{We believe this is driven by training batches in which multiple samples receive similar scores but have fairly non-overlapping segmentations.
-In this case, the output segmentation can contain something close to the union of the best samples' segmentation points, leading to oversegmentation.
-This effect is likely exaggerated in acoustic mode as compared to symbolic mode because acoustic word segments are generally much longer (in frames) than their corresponding symbolic word segments (in characters).}
-To prevent this from happening, we simply used 1-best rather than importance sampling for acoustic segmentation.
+Fourth, we discovered in practice that the assumption of independence
+between samples made by the importance scoring scheme as implemented
+for symbolic mode was distortionary in acoustic mode, such that the
+``best'' segmentation discovered through sampling often contained many
+times more segments than any of its component samples.\footnote{We
+  believe this is driven by training batches in which multiple samples
+  receive similar scores but have fairly non-overlapping
+  segmentations.  In this case, the output segmentation can contain
+  something close to the union of the best samples' segmentation
+  points, leading to oversegmentation.  This effect is likely
+  exaggerated in acoustic mode as compared to symbolic mode because
+  acoustic word segments are generally much longer (in frames) than
+  their corresponding symbolic word segments (in characters).}  To
+prevent this from happening, we simply used 1-best rather than
+importance sampling for acoustic segmentation.
 
 \begin{table}
 \begin{tabular}{p{2.1cm}cccc}
@@ -573,7 +603,7 @@ System & Bd P & Bd R & Bd F & Wd F\\
 \hline
 Lyzinski 15           & 18.8 & 64.0 & 29.0 & 2.4\\
 R\"{a}s\"{a}nen 15       & 75.7 & 33.7 & 46.7 & 9.6\\
-R\"{a}s\"{a}nen revised       & 61.1 & 50.1 & 55.2 & 12.4\\
+R\"{a}s\"{a}nen new       & 61.1 & 50.1 & 55.2 & 12.4\\
 Kamper 16       & 66.5 & 58.8 & 62.4 & 20.6\\
 \hline
 Ours & 61.6 & 43.5 & 51.0 & 9.7\\
@@ -582,12 +612,24 @@ Ours & 61.6 & 43.5 & 51.0 & 9.7\\
 \label{tab-acoust-results}
 \end{table}
 
-Results from the acoustic segmentation task are presented in Table~\ref{tab-acoust-results}, along with a comparison to results from other systems.
-\newcite{Lyzinski15} and \newcite{Rasanen15} were entrants in the Zerospeech 2015 challenge, in which \cite{Rasanen15} performed best in the word boundary detection measure.
-As shown in the table, our system outperforms both of these competitors.
-However, since the challenge concluded, \newcite{RasanenND} have modified their system and improved their segmentation score,\footnote{The new results are not yet published. Those reported above are copied from the results summary in \newcite{Kamper16}.} and \newcite{Kamper16} have established a new state of the art for this task.
-While our system currently remains far from these newer benchmarks, we expect that with systematic parameter tuning and investigation into appropriate sampling procedures for acoustic input, we might be able to improve substantially on the results presented here.
-We believe that the results of this preliminary investigation into the acoustic domain are promising, and that they bear out our claims about the flexibility of our general architecture.
+Results from the acoustic segmentation task are presented in
+Table~\ref{tab-acoust-results}, along with a comparison to results
+from other systems.  \newcite{Lyzinski15} and \newcite{Rasanen15} were
+entrants in the Zerospeech 2015 challenge, in which \cite{Rasanen15}
+performed best in the word boundary detection measure.  As shown in
+the table, our system outperforms both of these competitors.  However,
+since the challenge concluded, \newcite{RasanenND} have modified their
+system and improved their segmentation score,\footnote{The new results
+  are not yet published. Those reported above are copied from the
+  results summary in \newcite{Kamper16}.} and \newcite{Kamper16} have
+established a new state of the art for this task.  While our system
+currently remains far from these newer benchmarks, we expect that with
+systematic parameter tuning and investigation into appropriate
+sampling procedures for acoustic input, we might be able to improve
+substantially on the results presented here.  We believe that the
+results of this preliminary investigation into the acoustic domain are
+promising, and that they bear out our claims about the flexibility of
+our general architecture.
 
 
 \section{Conclusions and future directions}
