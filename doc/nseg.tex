@@ -223,7 +223,9 @@ acoustics, Gaussians \cite{Vallabha07,Feldman09} or Gaussian-HMMs
 
 An example of an alternative approach to representation learning from acoustics is \newcite{Rasanen15}.
 They exploit known acoustic indicators of syllable boundaries to infer syllable segments, cluster those segments using expectation-maximization (EM), and then identify multisyllabic words by searching for recurring cluster \textit{n}-grams.
-However, EM is known to find non-optimal solutions for many problems in natural language \cite{Johnson07}, and as a result latent information in the acoustic features used for clustering may be left unexploited.
+As a result, their system is constrained to propose word boundaries only at proposed syllable boundaries regardless of the representations acquired downstream.
+Furthermore, EM is known to find non-optimal solutions for many problems in natural language \cite{Johnson07}.
+To the extent that this inhibits their system's ability to exploit information in the acoustic feature space, it might lead to misidentification of recurrent syllable \textit{n}-grams and consequently to segmentation error.
 
 Latent underlying representations can also cause search problems,
 since the model must explore all the possible underlying forms which
