@@ -776,8 +776,9 @@ if __name__ == "__main__":
     parser.add_argument("--uttHidden", default=400)
     parser.add_argument("--wordHidden", default=40)
     parser.add_argument("--segHidden", default=100)
-    parser.add_argument("--wordDropout", default=.5)
-    parser.add_argument("--charDropout", default=.5)
+    parser.add_argument("--wordDropout", default=.25)
+    parser.add_argument("--charDropout", default=.25)
+    parser.add_argument("--metric", default=None)
     parser.add_argument("--pretrainIters", default=None)
     parser.add_argument("--trainNoSegIters", default=None)
     parser.add_argument("--trainIters", default=None)
@@ -809,6 +810,8 @@ if __name__ == "__main__":
 
     if args.acoustic:
         assert args.segfile and (args.goldwrd or args.goldphn), 'Files containing initial and gold segmentations are required in acoustic mode.'
+        if not args.metric:
+            args.metric = 'mse'
         if not args.pretrainIters:
             args.pretrainIters = 100
         if not args.trainNoSegIters:
@@ -832,6 +835,8 @@ if __name__ == "__main__":
         if not args.segWt:
             args.segWt = 0
     else:
+        if not args.metric:
+            args.metric = 'logprob'
         if not args.pretrainIters:
             args.pretrainIters = 10
         if not args.trainNoSegIters:
@@ -907,6 +912,7 @@ if __name__ == "__main__":
     print('Data loaded in %ds.' %(t1-t0))
     print()
     
+    METRIC = args.metric
     hidden = int(args.wordHidden) #40
     wordDecLayers = 1
     uttHidden = int(args.uttHidden) #400
@@ -926,10 +932,6 @@ if __name__ == "__main__":
     train_tot_iters = int(args.trainIters)
     RNN = recurrent.LSTM
     reverseUtt = True
-    if args.acoustic:
-        METRIC = 'mse'
-    else:
-        METRIC = "logprob"
     charDim = FRAME_SIZE if args.acoustic else len(chars)
 
     wordEncoder = Sequential()
@@ -1025,7 +1027,65 @@ if __name__ == "__main__":
         os.makedirs(logdir)
     else:
         load_models = True
-    
+
+    with open(logdir + 'params.txt', 'wb') as f:
+        print('Model parameters:', file=f)
+        if args.acoustic:
+            print('  Input type: Acoustic', file=f)
+        else:
+            print('  Input type: Symbolic', file=f)
+        print('  Input data location: %s' %path, file=f)
+        if args.segfile:
+            print('  Initial segmentation file: %s' %args.segfile, file=f)
+        if args.goldwrd:
+            print('  Gold word segmentation file: %s' %args.goldwrd, file=f)
+        if args.goldphn:
+            print('  Gold phoneme segmentation file: %s' %args.goldphn, file=f)
+        print('  Autoencoder loss function: %s' %METRIC, file=f)
+        print('  Word layer hidden units: %s' %hidden, file=f)
+        print('  Utterance layer hidden units: %s' %uttHidden, file=f)
+        print('  Segmenter network hidden units: %s' %segHidden, file=f)
+        print('  Word dropout rate: %s' %wordDropout, file=f)
+        print('  Character dropout rate: %s' %charDropout, file=f)
+        print('  Maximum utterance length (characters): %s' %maxlen, file=f)
+        print('  Maximum utterance length (words): %s' %maxutt, file=f)
+        print('  Maximum word length (characters): %s' %maxchar, file=f)
+        print('  Deletion penalty: %s' %DEL_WT, file=f)
+        print('  One letter segment penalty: %s' %ONE_LETTER_WT, file=f)
+        print('  Segmentation penalty: %s' %SEG_WT, file=f)
+        print('  Number of samples per batch: %s' %N_SAMPLES, file=f)
+        print('  Batch size: %s' %BATCH_SIZE, file=f)
+        print('  Pretraining iterations: %s' %pretrain_iters, file=f)
+        print('  Training iterations without segmenter network: %s' %train_noseg_iters, file=f)
+        print('  Training iterations (total): %s' %train_tot_iters, file=f)
+        print('', file=f)
+        print('Command line call to repro/resume:', file=f)
+        print('', file=f)
+        print('python scripts/autoencodeDecodeChars.py',
+              '%s' %path,
+              '--acoustic' if args.acoustic else '',
+              '--logfile %s' %logdir,
+              ('--goldwrd %s' %args.goldwrd) if args.goldwrd else '',
+              ('--goldphn %s' %args.goldphn) if args.goldphn else '',
+              '--metric %s' %METRIC,
+              '--wordHidden %s' %hidden,
+              '--uttHidden %s' %uttHidden,
+              '--segHidden %s' %segHidden,
+              '--wordDropout %s' %wordDropout,
+              '--charDropout %s' %charDropout,
+              '--maxLen %s' %maxlen,
+              '--maxUtt %s' %maxutt,
+              '--maxChar %s' %maxchar,
+              '--delWt %s' %DEL_WT,
+              '--oneLWt %s' %ONE_LETTER_WT,
+              '--segWt %s' %SEG_WT,
+              '--nSample %s' %N_SAMPLES,
+              '--batchSize %s' %BATCH_SIZE,
+              '--pretrainIters %s' %pretrain_iters,
+              '--trainNoSegIters %s' %train_noseg_iters,
+              '--trainIters %s' %train_tot_iters,
+              '--gpufrac %s' %args.gpufrac, file=f)
+
     print("Logging at", logdir)
     
     if load_models and os.path.exists(logdir + 'model.h5'):
@@ -1073,7 +1133,8 @@ if __name__ == "__main__":
     utt_lens = dict.fromkeys(doc_list)
     if deletedChars == None:
         deletedChars = dict.fromkeys(doc_list)
-    oneLetter = dict.fromkeys(doc_list)
+    if oneLetter == None:
+        oneLetter = dict.fromkeys(doc_list)
     if aeLosses == None:
         aeLosses = dict.fromkeys(doc_list)
 
@@ -1296,16 +1357,12 @@ if __name__ == "__main__":
 
                     s = e
 
-                docLoss = aeLosses[doc] / batch_ix
+                aeLosses[doc] = aeLosses[doc] / batch_ix
+                docLoss = aeLosses[doc]
                 docDel = deletedChars[doc]
                 docOneL = oneLetter[doc]
                 docSeg = allBestSegs[doc].sum()
                 
-                epochLoss += docLoss
-                epochDel += docDel
-                epochOneL += docOneL
-                epochSeg += docSeg
-
                 timeSeg = frameSeg2timeSeg(intervals[doc],allBestSegs[doc])
 
                 print()
@@ -1483,6 +1540,12 @@ if __name__ == "__main__":
         if tdoc1 != None:
             print(' Completed in %ds.' %(tdoc2-tdoc1))
 
+        if args.acoustic:
+            epochLoss = sum([aeLosses[doc] for doc in aeLosses])/len(aeLosses)
+            epochDel = sum([deletedChars[doc] for doc in deletedChars])
+            epochOneL = sum([oneLetter[doc] for doc in oneLetter])
+            epochSeg = sum([allBestSegs[doc].sum() for doc in allBestSegs])
+
         t1 = time.time()
         print("Iteration total time: %ds" %(t1-t0))
         print('Total frames:', total_frames)
@@ -1490,7 +1553,7 @@ if __name__ == "__main__":
         print("Deletions:", epochDel)
         print("One letter words:", epochOneL)
         print("Total segmentation points:", epochSeg)
-        segScore = writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, 
+        segScore = writeLog(iteration, epochLoss/(len(mfccs)-1), epochDel, epochOneL, epochSeg, 
                  text, allBestSegs, logdir, intervals, args.acoustic, print_headers=iteration==0)
         if args.acoustic:
             if text['wrd']:

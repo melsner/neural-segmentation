@@ -54,7 +54,7 @@
 \maketitle
 
 \begin{abstract}
-We propose the first unsupervised LSTM speech segmenter as a cognitive model of the acquisition of words from unsegmented input.
+We present the first unsupervised LSTM speech segmenter as a cognitive model of the acquisition of words from unsegmented input.
 Cognitive biases toward phonological and syntactic predictability in speech are rooted in the limitations of human memory \cite{Baddeley98};
 compressed representations are easier to acquire and retain in memory.
 To model the biases introduced by these memory limitations, our system uses an LSTM-based encoder-decoder with a small number of hidden units,
@@ -219,6 +219,10 @@ learning models use parametric distributions over the data--- for
 acoustics, Gaussians \cite{Vallabha07,Feldman09} or Gaussian-HMMs
 \cite{Lee12,Lee15}. But these are a notoriously poor fit to real speech sounds
 \cite{Glass?}.
+
+An example of an alternative approach to representation learning from acoustics is \newcite{Rasanen15}.
+They exploit known acoustic indicators of syllable boundaries to infer syllable segments, cluster those segments using expectation-maximization (EM), and then identify multisyllabic words by searching for recurring cluster \textit{n}-grams.
+However, EM is known to find non-optimal solutions for many problems in natural language \cite{Johnson07}, and as a result latent information in the acoustic features used for clustering may be left unexploited.
 
 Latent underlying representations can also cause search problems,
 since the model must explore all the possible underlying forms which
@@ -510,7 +514,7 @@ the infant data \cite{Bortfeld05}.
 We began by claiming that an advantage of our model was its flexible architecture that permits dense acoustic features as input (rather than symbolic phone labels) with little modification.
 In this section, we present priliminary results from a follow-up experiment in which we tested this claim by deploying our system as an acoustic segmenter on the English portion of the Zerospeech 2015 challenge dataset \cite{Versteegh15}.
 We preprocessed the raw acoustic data by extracting 25ms 13-dimensional mel frequency cepstral coefficients with first and second order deltas at a step size of 10ms.
-The resulting sequences of 39-dimensional frames were fed into the network as ``characters.''
+We then trained the network on the resulting sequences of 39-dimensional frames.
 
 Given that the goal of the experiment was to test the existing architecture on a novel task, we intentionally conducted this experiment with minimal parameter tuning or architectural modification.
 However, we made several key changes in response to the unique challenges presented by acoustic input.
@@ -521,7 +525,7 @@ We also upscaled our one-letter penalty from 10 to 50, modeling our strong prior
 
 Second, in contrast to the phoneme sequences in the Brent corpus discussed above, utterance boundaries are not observed in acoustic input.
 In order to run the two-level autoencoder, the input must somehow be organized into sequences of utterances.
-We therefore inferred utterance boundaries by first segmenting the data into words according to the proposal distribution, then consuming those words one-by-one up to the maximum utterance length (in frames).
+We imposed utterance boundaries by iteratively consuming the next discovered word in the time series up to the maximum utterance length (in frames).
 The aforementioned clipping penalties punish the system for utterances that contain too many words, preventing it from optimizing its autoencoder loss by segmenting everywhere.
 
 Third, for our initial proposal distribution we used the speech region segmentation provided by the Zerospeech challenge, consisting of speech intervals identified through automatic voice activity detection (VAD), rather than using the uniform initialization described above for symbolic mode.
@@ -550,12 +554,22 @@ Ours & 61.6 & 43.5 & 51.0 & 9.7\\
 Results from the acoustic segmentation task are presented in Table~\ref{tab-acoust-results}, along with a comparison to results from other systems.
 \newcite{Lyzinski15} and \newcite{Rasanen15} were entrants in the Zerospeech 2015 challenge, in which \cite{Rasanen15} performed best in the word boundary detection measure.
 As shown in the table, our system outperforms both of these competitors.
-However, since the challenge concluded, \newcite{RasanenND} have modified their system and improved their segmentation score, and \newcite{Kamper16} have established a new state of the art for this task.
+However, since the challenge concluded, \newcite{RasanenND} have modified their system and improved their segmentation score,\footnote{The new results are not yet published. Those reported above are copied from the results summary in \newcite{Kamper16}.} and \newcite{Kamper16} have established a new state of the art for this task.
 While our system currently remains far from these newer benchmarks, we expect that with systematic parameter tuning and investigation into appropriate sampling procedures for acoustic input, we might be able to improve substantially on the results presented here.
 We believe that the results of this preliminary investigation into the acoustic domain are promising, and that they bear out our claims about the flexibility of our general architecture.
 
 
-\section{Conclusions}
+\section{Conclusions and future directions}
+
+This work presented a new unsupervised LSTM architecture for discovering meaningful segments in representations of continuous speech.
+Memory limitations in the autencoder part of the network apply pressure to discover compressed representations much as human memory limitations have been argued to guide lexical acquisition.
+By varying the size of the LSTM's hidden state, we showed that word segmentation performance on the Brent corpus is driven by memory limitations, with performance improving (up to a point) as we constrain the system's memory capacity.
+And by successfully deploying our system on both symbolic (character) and acoustic representations of speech, we demonstrated that our approach is flexible enough to adapt to either representation of the speech stimulus.
+
+In the future we hope to pursue a number of lines of inquiry.
+We plan to conduct more detailed parameter tuning in the acoustic domain and to segment the Xitsonga dataset supplied with the Zerospeech 2015 challenge.
+We also intend to introduce additional layers into the autoencoder network so as to allow to jointly acquire phone-like, morph-like, and/or word-like units in the acoustic signal.
+And we plan to explore clustering techniques that would allow our system to discover categories in addition to probable segmentation points.
 
 \section*{Acknowledgments}
 
