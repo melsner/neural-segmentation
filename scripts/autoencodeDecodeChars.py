@@ -215,18 +215,21 @@ def lossByUtt(model, Xb, yb, BATCH_SIZE, metric="logprob"):
 
         return rightPerUtt
 
-def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
+def guessSegTargets(scores, penalties, segs, priorSeg, metric="logprob", verbose=True):
     #sample x utterance
 
+    assert metric.startswith('logprob') or metric.startswith('mse'), 'Unrecognized loss metric: %s' %metric
+
     scores = np.array(scores)
-    
-    if metric == 'logprob':
-        MM = np.max(scores, axis=0, keepdims=True)
-        eScores = np.exp(scores - MM)
-        #approximately the probability of the sample given the data
-        pSeg = eScores / eScores.sum(axis=0, keepdims=True)
-        utt_selector = np.arange(pSeg.shape[0])
-        best = np.argmax(pSeg, axis=0)
+    if metric.startswith('mse'):
+        scores = -scores
+    penalties = -np.array(penalties)
+    scores += penalties
+    MM = np.max(scores, axis=0, keepdims=True)
+    eScores = np.exp(scores - MM)
+    #approximately the probability of the sample given the data
+    pSeg = eScores / eScores.sum(axis=0, keepdims=True)
+    if metric.startswith('logprob'):
         bestSegs=[]
         bestScore=0
         bestProb=0
@@ -237,49 +240,15 @@ def guessSegTargets(scores, segs, priorSeg, metric="logprob"):
         bestProb /= len(best)
         bestSegs = np.array(bestSegs)
         print('      Best segmentation set: score = %s, prob = %s, num segs = %s' %(bestScore, bestProb, bestSegs.sum()))
-    elif metric == 'logprob1best':
-        MM = np.max(scores, axis=0, keepdims=True)
-        eScores = np.exp(scores - MM)
-        #approximately the probability of the sample given the data
-        pSeg = eScores / eScores.sum(axis=0, keepdims=True)
-        utt_selector = np.arange(pSeg.shape[0])
-        best = np.argmax(pSeg, axis=0)
-        bestSegs=[]
-        bestScore=0
-        bestProb=0
-        for ix in xrange(len(best)):
-            bestSegs.append(segs[best[ix]][ix,:])
-            bestScore += scores[best[ix],ix]
-            bestProb += pSeg[best[ix],ix]
-        bestProb /= len(best)
-        bestSegs = np.array(bestSegs)
-        print('      Best segmentation set: score = %s, prob = %s, num segs = %s' %(bestScore, bestProb, bestSegs.sum()))
+    elif metric.startswith('mse'):
+        best_score = np.argmax(scores)
+        print('      Best segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(best_score, scores[best_score][0], pSeg[best_score][0], segs[best_score].sum()))
+        worst_score = np.argmin(scores)
+        print('      Worst segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(worst_score, scores[worst_score][0], pSeg[worst_score][0], segs[worst_score].sum()))
+        bestSegs = segs[best_score]
+
+    if metric.endswith('1best'):
         return bestSegs, bestSegs
-    elif metric == 'mse':
-        MM = np.max(-scores, axis=0, keepdims=True)
-        eScores = np.exp(-scores - MM)
-        #approximately the probability of the sample given the data
-        pSeg = eScores / eScores.sum(axis=0, keepdims=True)
-        best_score = np.argmin(scores)
-        print('      Best segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(best_score, scores[best_score][0], pSeg[best_score][0], segs[best_score].sum()))
-        worst_score = np.argmax(scores)
-        print('      Worst segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(worst_score, scores[worst_score][0], pSeg[worst_score][0], segs[worst_score].sum()))
-    elif metric == 'mse1best':
-        MM = np.max(-scores, axis=0, keepdims=True)
-        eScores = np.exp(-scores - MM)
-        #approximately the probability of the sample given the data
-        pSeg = eScores / eScores.sum(axis=0, keepdims=True)
-        best_score = np.argmin(scores)
-        print('      Best segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(best_score, scores[best_score][0], pSeg[best_score][0], segs[best_score].sum()))
-        worst_score = np.argmax(scores)
-        print('      Worst segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(worst_score, scores[worst_score][0], pSeg[worst_score][0], segs[worst_score].sum()))
-        return segs[best_score], segs[best_score]
-        #seg_ix = np.where(np.random.multinomial(1, np.squeeze(pSeg)))[0][0]
-        #print('      Sampled segmentation: ix = %s, score = %s, prob = %s, num segs = %s' %(seg_ix, scores[seg_ix][0], pSeg[seg_ix][0], segs[seg_ix].sum()))
-        #print('')
-        #return segs[seg_ix], segs[seg_ix]
-    else:
-        pSeg = scores / scores.sum(axis=0, keepdims=True)
 
     #sample x utterance x seg 
     segmat = np.array(segs)
@@ -1193,6 +1162,7 @@ if __name__ == "__main__":
 
             toPrint = 10
             preds = model.predict(X_train[doc][:toPrint], verbose=0)
+            print('Sum of autoencoder predictions: %s' %preds.sum())
             if reverseUtt:
                 preds = preds[:, ::-1, :]
 
@@ -1298,6 +1268,7 @@ if __name__ == "__main__":
                         pSegs = np.squeeze(pSegs)
                         pSegs[np.where(forced[doc][s:e])] = 1.
                     scores = []
+                    penalties = []
                     segSamples = []
                     print('    Sampling and scoring segmentations.')
                     for sample in range(nSamples):
@@ -1319,12 +1290,12 @@ if __name__ == "__main__":
                         #                     ONE_LETTER_WT * oneLetter) + \
                         #                     SEG_WT * segs.sum())[None,...])
                         #scores.append(np.ones((1)))
-                        scores.append((np.sum(loss + \
-                                             DEL_WT * deleted + \
-                                             ONE_LETTER_WT * onelet) + \
-                                             SEG_WT * segs.sum())[None,...])
+                        scores.append(np.sum(loss)[None,...])
+                        penalties.append(((DEL_WT * deleted + \
+                                           ONE_LETTER_WT * onelet).sum() + \
+                                           SEG_WT * segs.sum())[None,...])
                         segSamples.append(np.resize(segs, (1, BATCH_SIZE)))
-                    segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs[None,...],
+                    segProbs, bestSegs = guessSegTargets(scores, penalties, segSamples, pSegs[None,...],
                                                          metric=METRIC)
                     bestSegs[0,np.where(forced[doc][s:e])] = 1.
                    
@@ -1427,6 +1398,7 @@ if __name__ == "__main__":
                     # pSegs = (1 - alpha) * pSegsOff + alpha * pSegsOn
 
                     scores = []
+                    penalties = []
                     segSamples = []
                     for sample in range(nSamples):
                         segs = sampleCharSegs(utts, pSegs)
@@ -1438,11 +1410,12 @@ if __name__ == "__main__":
                             yb = Xb
 
                         loss = lossByUtt(model, Xb, yb, BATCH_SIZE, metric=METRIC)
-                        scores.append(loss - DEL_WT * deletedChars
-                                      - ONE_LETTER_WT * oneLetter)
+                        scores.append(loss)
+                        penalties.append(DEL_WT * deletedChars
+                                         + ONE_LETTER_WT * oneLetter)
                         segSamples.append(segs)
 
-                    segProbs, bestSegs = guessSegTargets(scores, segSamples, pSegs,
+                    segProbs, bestSegs = guessSegTargets(scores, penalties, segSamples, pSegs,
                                                          metric=METRIC)
                    
                     Xb, deleted, oneLetter = charSegs2X(utts, bestSegs,
@@ -1553,7 +1526,6 @@ if __name__ == "__main__":
         print("Iteration total time: %ds" %(t1-t0))
         if args.acoustic:
             print('Total frames:', total_frames)
-            epochLoss /= len(mfccs) - 1
         print("Loss:", epochLoss)
         print("Deletions:", epochDel)
         print("One letter words:", epochOneL)
