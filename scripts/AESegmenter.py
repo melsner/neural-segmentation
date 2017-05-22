@@ -79,7 +79,7 @@ def trainSegmenterOnly(segmenter, Xs, Xs_mask, Y, trainIters, batch_size):
                       optimizer="adam")
 
     segmenter.fit(np.concatenate([Xs[d] for d in Xs]),
-                  np.concatenate([Y[d] for d in Y]),
+                  np.expand_dims(np.concatenate([Y[d] for d in Y]), -1),
                   batch_size=batch_size,
                   epochs=trainIters)
 
@@ -467,7 +467,7 @@ if __name__ == "__main__":
             segsProposal = trainSegmenterOnly(segmenter,
                                               Xs,
                                               Xs_mask,
-                                              Y[:,None],
+                                              Y,
                                               trainIters,
                                               BATCH_SIZE)
             print('Scoring segmentations')
@@ -494,7 +494,7 @@ if __name__ == "__main__":
             segsProposal = trainSegmenterOnly(segmenter,
                                               Xs,
                                               Xs_mask,
-                                              Y[:,None],
+                                              Y,
                                               trainIters,
                                               BATCH_SIZE)
             print('Scoring segmentations')
@@ -525,7 +525,7 @@ if __name__ == "__main__":
                 segsProposal = trainSegmenterOnly(segmenter,
                                                   Xs,
                                                   Xs_mask,
-                                                  Y[:,None],
+                                                  Y,
                                                   trainIters)
                 print('Scoring segmentations')
                 scores = getSegScores(gold['phn'], frameSegs2timeSegs(intervals, segsProposal), acoustic=ACOUSTIC)
@@ -547,7 +547,7 @@ if __name__ == "__main__":
                 segsProposal = trainSegmenterOnly(segmenter,
                                                   Xs,
                                                   Xs_mask,
-                                                  Y[:,None],
+                                                  Y,
                                                   trainIters)
                 print('Scoring segmentations')
                 scores = getSegScores(gold['phn'], frameSegs2timeSegs(intervals, segsProposal), acoustic=ACOUSTIC)
