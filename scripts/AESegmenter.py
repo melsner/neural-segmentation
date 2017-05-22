@@ -37,18 +37,55 @@ def inputSliceClosure(dim):
 def outputSliceClosure(dim):
     return lambda xx: xx[:, dim, :]
 
-def trainSegmenterOnGold(segmenter, Xs, Xs_mask, Y, trainIters):
+def trainAEOnly(ae, Xs, Xs_mask, segs, trainIters, batch_size, reverseUtt, acoustic=False):
+    print('Training auto-encoder network')
+
+    ## Preprocess input data
+    Xae, deletedChars, oneLetter = XsSegs2Xae(Xs,
+                                              Xs_mask,
+                                              segs,
+                                              maxUtt,
+                                              maxLen)
+
+    Yae = dict.fromkeys(Xae.keys())
+    if reverseUtt:
+        for doc in Xae:
+            Yae[doc] = np.flip(Xae[doc], 1)
+    else:
+        Yae = Xae
+
+    ## Reinitialize the network in case any training has already occurred
+    if acoustic:
+        ae.compile(loss='mean_squared_error',
+                      optimizer='adam')
+    else:
+        ae.compile(loss='categorical_crossentropy',
+                      optimizer='adam',
+                      metrics=['accuracy'])
+
+    ae.fit(np.concatenate([Xae[d] for d in Xae]),
+           np.concatenate([Yae[d] for d in Yae]),
+           batch_size=batch_size,
+           epochs=trainIters)
+
+def trainSegmenterOnly(segmenter, Xs, Xs_mask, Y, trainIters, batch_size):
+    print('Training segmenter network')
+
     segsProposal = dict.fromkeys(Xs.keys())
     segScores = dict.fromkeys(Xs.keys())
 
+    ## Reinitialize the network in case any training has already occurred
+    segmenter.compile(loss="binary_crossentropy",
+                      optimizer="adam")
+
     segmenter.fit(np.concatenate([Xs[d] for d in Xs]),
                   np.concatenate([Y[d] for d in Y]),
-                  batch_size=BATCH_SIZE,
+                  batch_size=batch_size,
                   epochs=trainIters)
 
     print('Getting model predictions for evaluation')
     for doc in segsProposal:
-        masked_prediction = np.ma.array(segmenter.predict(Xs[doc], batch_size=BATCH_SIZE) > 0.5, mask=Xs_mask[doc])
+        masked_prediction = np.ma.array(segmenter.predict(Xs[doc], batch_size=batch_size) > 0.5, mask=Xs_mask[doc])
         segsProposal[doc] = masked_prediction.compressed()
 
     return segsProposal
@@ -145,7 +182,7 @@ if __name__ == "__main__":
     DEBUG = args.debug
     wordDecLayers = 1
     RNN = recurrent.LSTM
-    reverseUtt = False
+    reverseUtt = True
 
     checkpoint['wordHidden'] = wordHidden
     checkpoint['uttHidden'] = uttHidden
@@ -354,7 +391,7 @@ if __name__ == "__main__":
 
     resh = TimeDistributed(Dropout(wordDropout, noise_shape=(1,)))(resh)
 
-    ## Utterance-level AE
+    ## b. Utterance-level AE
     encoderLSTM = RNN(uttHidden, name="utt-encoder")(resh)
     repeater = RepeatVector(maxUtt, input_shape=(wordHidden,))(encoderLSTM)
     decoder = RNN(uttHidden, return_sequences=True, 
@@ -363,7 +400,7 @@ if __name__ == "__main__":
 
     resh2 = TimeDistributed(wordDecoder)(decOut)
 
-    ## Output masking
+    ## c. Output masking
     if reverseUtt:
         premask = Lambda(lambda x: K.cast(K.any(K.reverse(inp, 1), axis=-1, keepdims=True), 'float32')*x)(resh2)
     else:
@@ -403,59 +440,135 @@ if __name__ == "__main__":
 
 
     ## Unit testing of segmenter network by training on gold segmentations
-    if args.supervisedSegmenter:
+    if args.supervisedAE or args.supervisedSegmenter:
         print('')
-        print('Supervised segmenter training (words)')
+        print('Supervised network test (word-level segmentations)')
+
+        ## Gold segmentations
+        print('Using gold segmentations')
         if ACOUSTIC:
             _, goldseg = timeSegs2frameSegs(GOLDWRD)
             Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar)
         else:
             goldseg = gold
             Y = texts2Segs(gold, maxChar)
-        segsProposal = trainSegmenterOnGold(segmenter,
-                                            Xs,
-                                            Xs_mask,
-                                            Y,
-                                            trainIters)
-        print('Scoring segmentations')
-        if ACOUSTIC:
-            scores = getSegScores(gold['wrd'], frameSegs2timeSegs(intervals, segsProposal), acoustic=ACOUSTIC)
-        else:
-            scores = getSegScores(gold, segsProposal, acoustic=ACOUSTIC)
-        printSegScores(scores, acoustic=ACOUSTIC)
 
-        if ACOUSTIC:
-            _, goldseg = timeSegs2frameSegs(GOLDPHN)
-            Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar)
-            segsProposal = trainSegmenterOnGold(segmenter,
-                                                Xs,
-                                                Xs_mask,
-                                                Y,
-                                                trainIters)
+        if args.supervisedAE:
+            trainAEOnly(model,
+                        Xs,
+                        Xs_mask,
+                        Y,
+                        trainIters,
+                        BATCH_SIZE,
+                        reverseUtt,
+                        ACOUSTIC)
+
+        if args.supervisedSegmenter:
+            segsProposal = trainSegmenterOnly(segmenter,
+                                              Xs,
+                                              Xs_mask,
+                                              Y[:,None],
+                                              trainIters,
+                                              BATCH_SIZE)
             print('Scoring segmentations')
-            scores = getSegScores(gold['phn'], frameSegs2timeSegs(intervals, segsProposal), acoustic=ACOUSTIC)
+            if ACOUSTIC:
+                scores = getSegScores(gold['wrd'], frameSegs2timeSegs(intervals, segsProposal), acoustic=ACOUSTIC)
+            else:
+                scores = getSegScores(gold, segsProposal, acoustic=ACOUSTIC)
             printSegScores(scores, acoustic=ACOUSTIC)
 
+        ## Random segmentations
+        print('Using random segmentations')
+        Y = sampleSegs(pSegs)
+        if args.supervisedAE:
+            trainAEOnly(model,
+                        Xs,
+                        Xs_mask,
+                        Y,
+                        trainIters,
+                        BATCH_SIZE,
+                        reverseUtt,
+                        ACOUSTIC)
+
+        if args.supervisedSegmenter:
+            segsProposal = trainSegmenterOnly(segmenter,
+                                              Xs,
+                                              Xs_mask,
+                                              Y[:,None],
+                                              trainIters,
+                                              BATCH_SIZE)
+            print('Scoring segmentations')
+            if ACOUSTIC:
+                scores = getSegScores(gold['wrd'], frameSegs2timeSegs(intervals, segsProposal), acoustic=ACOUSTIC)
+            else:
+                scores = getSegScores(gold, segsProposal, acoustic=ACOUSTIC)
+            printSegScores(scores, acoustic=ACOUSTIC)
+
+        if ACOUSTIC:
+            print('Supervised network test (phone-level segmentations')
+
+            ## Gold segmentations
+            print('Using gold segmentations')
+            _, goldseg = timeSegs2frameSegs(GOLDPHN)
+            Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar)
+
+            if args.supervisedAE:
+                trainAEOnly(model,
+                            Xs,
+                            Xs_mask,
+                            Y,
+                            trainIters,
+                            reverseUtt,
+                            ACOUSTIC)
+
+            if args.supervisedSegmenter:
+                segsProposal = trainSegmenterOnly(segmenter,
+                                                  Xs,
+                                                  Xs_mask,
+                                                  Y[:,None],
+                                                  trainIters)
+                print('Scoring segmentations')
+                scores = getSegScores(gold['phn'], frameSegs2timeSegs(intervals, segsProposal), acoustic=ACOUSTIC)
+                printSegScores(scores, acoustic=ACOUSTIC)
+
+            ## Random segmentations
+            print('Using random segmentations')
+            Y = sampleSegs(pSegs)
+            if args.supervisedAE:
+                trainAEOnly(model,
+                            Xs,
+                            Xs_mask,
+                            Y,
+                            trainIters,
+                            reverseUtt,
+                            ACOUSTIC)
+
+            if args.supervisedSegmenter:
+                segsProposal = trainSegmenterOnly(segmenter,
+                                                  Xs,
+                                                  Xs_mask,
+                                                  Y[:,None],
+                                                  trainIters)
+                print('Scoring segmentations')
+                scores = getSegScores(gold['phn'], frameSegs2timeSegs(intervals, segsProposal), acoustic=ACOUSTIC)
+                printSegScores(scores, acoustic=ACOUSTIC)
+
         exit()
-    ## TODO: Unit testing of auto-encoder network by training on gold vs. random segmentations
-    elif args.supervisedAE:
-        pass
+
 
 
 
 
     ## Auto-encoder pretraining on initial segmentation proposal
     print()
-    print("Pre-training autoencoder...")
+    print("Pre-training networks.")
     while iteration < pretrainIters and pretrain:
         print('-' * 50)
         print('Iteration', iteration + 1)
 
         t0 = time.time()
 
-        ## Sample segs
         segs = sampleSegs(pSegs)
-
         Xae, deletedChars, oneLetter = XsSegs2Xae(Xs,
                                                   Xs_mask,
                                                   segs,
@@ -475,6 +588,11 @@ if __name__ == "__main__":
 
         print("Total deleted chars: %d" %(sum([deletedChars[d].sum() for d in deletedChars])))
         print("Total one-letter words: %d" %(sum([oneLetter[d].sum() for d in oneLetter])))
+
+        if iteration == 0:
+            print('Training segmenter network on random segmentation.')
+            segmenter.fit(np.concatenate([Xs[d] for d in Xs]), np.concatenate([segs[d] for d in segs]))
+        print('Training auto-encoder network on random segmentation.')
         model.fit(np.concatenate([Xae[d] for d in Xae]), np.concatenate([Yae[d] for d in Yae]), batch_size=BATCH_SIZE, epochs=1)
 
         # Correctness checks for NN masking
@@ -482,10 +600,10 @@ if __name__ == "__main__":
             for doc in Xae:
                 out = model.predict(Xae[doc], batch_size=BATCH_SIZE)
                 print('Document: %s' %doc)
-                print('Characters in input: %s' %Xae[doc].any(-1).sum())
-                print('Characters in output: %s (should equal characters in input)' %out.any(-1).sum())
-                print('Deleted characters: %s' %int(deletedChars[doc].sum()))
-                print('Characters + deleted: %s (should be %s)' % (out.any(-1).sum() + int(deletedChars[doc].sum()), raw_cts[doc]))
+                print('Timesteps in input: %s' %Xae[doc].any(-1).sum())
+                print('Timesteps in output: %s (should equal timesteps in input)' %out.any(-1).sum())
+                print('Deleted timesteps: %s' %int(deletedChars[doc].sum()))
+                print('Timesteps + deleted: %s (should be %s)' % (out.any(-1).sum() + int(deletedChars[doc].sum()), raw_cts[doc]))
                 print('')
             
         model.save(logdir + '/model.h5')
@@ -546,7 +664,7 @@ if __name__ == "__main__":
         scores[doc] = np.zeros((len(Xs[doc]), N_SAMPLES, maxUtt))
     print()
 
-    print('Co-training autoencoder and segmenter...')
+    print('Training networks jointly.')
     while iteration < trainIters:
         epochLoss = 0
         epochDel = 0
@@ -588,7 +706,8 @@ if __name__ == "__main__":
                                                       maxLen)
 
             if reverseUtt:
-                Yae = np.flip(Xae, 1)
+                for doc in doc_list:
+                    Yae[doc] = np.flip(Xae[doc], 1)
             else:
                 Yae = Xae
 
@@ -614,14 +733,18 @@ if __name__ == "__main__":
                                                   maxLen)
 
         if reverseUtt:
-            Yae = np.flip(Xae, 1)
+            for doc in doc_list:
+                Yae[doc] = np.flip(Xae[doc], 1)
         else:
             Yae = Xae
 
+        print('Updating auto-encoder network')
         h = model.fit(np.concatenate([Xae[d] for d in Xae]),
                          np.concatenate([Yae[d] for d in Yae]),
                          batch_size=BATCH_SIZE,
                          epochs=1)
+
+        print('Updating segmenter network')
         segmenter.fit(np.concatenate([Xs[d] for d in Xs]),
                       np.concatenate([segProbs[d] for d in segProbs]),
                       batch_size=BATCH_SIZE,
@@ -658,7 +781,7 @@ if __name__ == "__main__":
                 segScores['phn']['##overall##'][1] = precision_recall_f(*segScores['phn']['##overall##'][0])
                 segScores['phn']['##overall##'][3] = precision_recall_f(*segScores['phn']['##overall##'][2])
                 print('Phone segmentation scores:')
-                printSegScore(segScore['phn'], ACOUSTIC)
+                printSegScores(segScore['phn'], ACOUSTIC)
             writeTimeSegs(frameSegs2timeSegs(intervals, segsProposal), out_file=logdir, TextGrid=False)
             writeTimeSegs(frameSegs2timeSegs(intervals, segsProposal), out_file=logdir, TextGrid=True)
         else:
