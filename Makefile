@@ -97,9 +97,8 @@ endif
 #
 ################################################################################
 
-zerospeech-%: build/zerospeech/%/mfccs build/zerospeech/%/rasanen_seg.txt scripts/autoencodeDecodeChars.py \
-data/%.wrd
-	python $(word 3, $^) $(dir $(word 1, $^)) --segfile $(word 2, $^) --goldfile $(word 4, $^) --logfile $*/ --acoustic --gpufrac None
+zerospeech-%: build/zerospeech/%/mfccs data/%_vad.txt data/%.wrd data/%.phn
+	cp $(wordlist 2,100,$^) $(dir $(word 1, $^))
 
 clean:
 	rm -rf build

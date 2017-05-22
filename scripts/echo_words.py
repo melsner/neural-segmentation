@@ -38,10 +38,12 @@ class CharacterTable(object):
             X[i, self.char_indices[c]] = 1
         return X
 
-    def decode(self, X, calc_argmax=True):
-        if calc_argmax:
-            X = X.argmax(axis=-1)
-        return ''.join(self.indices_char[x] for x in X)
+    def decode(self, X):
+        # Add small non-zero dimension to index padding characters
+        X = np.concatenate([X, np.expand_dims(np.ones_like(X[0]), 0) * 0.01])
+        X = X.argmax(-1)
+        padding_ix = X.shape[-1] - 1
+        return ''.join(self.indices_char[x] if x < padding_ix else 'X' for x in X)
 
     def dim(self):
         return len(self.chars)
@@ -99,71 +101,3 @@ def pad(word, maxlen, padChar):
         return clipped + (padChar * (maxlen - len(clipped)))
     else:
         return clipped + [padChar,] * (maxlen - len(clipped))
-
-if __name__ == "__main__":
-    path = "br-phono.txt"
-    text = open(path).read()
-    words = text.split()
-    print('corpus length:', len(words))
-
-    chars = ["X"] + list(set("".join(words)))
-    print('total chars:', len(chars))
-    ctable = CharacterTable(chars)
-
-    maxlen = 7
-    print("max length", maxlen)
-
-    print('Vectorization...')
-    X = np.zeros((len(words), maxlen, len(chars)), dtype=np.bool)
-    y = np.zeros((len(words), maxlen, len(chars)), dtype=np.bool)
-    for ii, word in enumerate(words):
-        #print("encoding", word, "at row", ii)
-        X[ii] = ctable.encode(pad(word, maxlen, "X"), maxlen)
-        y[ii] = ctable.encode(pad(word, maxlen, "X"), maxlen)
-
-    # Explicitly set apart 10% for validation data that we never train over.
-    split_at = len(X) - len(X) // 10
-    (X_train, X_val) = (slice_X(X, 0, split_at), slice_X(X, split_at))
-    (y_train, y_val) = (y[:split_at], y[split_at:])
-
-    RNN = recurrent.LSTM
-    #the memory capacity depends on this parameter
-    #at 128, 7-letter words can be reproduced, but at 10 they cannot
-    #20 gets to 83% at 5, 93 at 14, 97 at 23, 98 by 40
-    #30 is in the 97 range at 14 epochs, 90% at 5
-    #40 gets >99 acc in about 14 epochs
-    #80 gets to 96 in only 4 epochs and 99 in 7
-    HIDDEN_SIZE = 40 #128
-    BATCH_SIZE = 128
-    LAYERS = 2
-
-    model = buildCharEncDec(hidden, RNN, LAYERS, maxlen, chars)
-
-    # Train the model each generation and show predictions against
-    # the validation dataset.
-    for iteration in range(1, 15):
-        print()
-        print('-' * 50)
-        print('Iteration', iteration)
-        model.fit(X_train, y_train, batch_size=BATCH_SIZE, nb_epoch=1,
-                  validation_data=(X_val, y_val))
-        # Select 10 samples from the validation set at random so we 
-        # can visualize errors.
-        for i in range(10):
-            ind = np.random.randint(0, len(X_val))
-            rowX, rowy = X_val[np.array([ind])], y_val[np.array([ind])]
-            preds = model.predict_classes(rowX, verbose=0)
-            q = ctable.decode(rowX[0])
-            correct = ctable.decode(rowy[0])
-            guess = ctable.decode(preds[0], calc_argmax=False)
-            print('Q', q)
-            print('T', correct)
-            if correct == guess:
-                print(colors.ok + 'Y' + colors.close, end=" ")
-            else:
-                print(colors.fail + 'N' + colors.close, end=" ")
-            print(guess)
-            print('---')
-
-    model.save("word-echo.h5")
-    model.save_weights("word-echo-weights.h5")

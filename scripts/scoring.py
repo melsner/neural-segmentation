@@ -1,37 +1,7 @@
 from __future__ import print_function, division
 import sys, numpy as np, time
+from data_handling import charSeq2WrdSeq
 
-def reconstruct(chars, segs, maxutt, wholeSent=False):
-    uttWds = np.where(segs)[0][:maxutt]
-    prev = 0
-    words = [] 
-    for ii,bd in enumerate(uttWds):
-        word = chars[prev:bd + 1] 
-        words.append(word)
-        assert(word != "")
-        prev = bd + 1
-
-    if wholeSent:
-        if prev < len(chars):
-            word = chars[prev:len(chars)]
-            words.append(word)
-
-    return words
-
-def matToSegs(segmat, text):
-    if type(text[0][0]) == str: 
-        text = ["".join(utt) for utt in text]    
-    else:
-        text = [sum(utt, []) for utt in text]
-
-    res = [] 
-    for utt in range(len(text)):
-        thisSeg = segmat[utt]
-        #pass dummy max utt length to reconstruct everything
-        rText = reconstruct(text[utt], thisSeg, 100, wholeSent=True)
-        res.append(rText)
-
-    return res
 
 def precision_recall(n_matched, n_gold, n_proposed):
     """Calculates the classification precision and recall, given
@@ -356,40 +326,38 @@ def scoreLexicon(underlying, found):
 
     return precision_recall_f(matched, actual, proposed)
 
-def getSegScore(text, allBestSeg):
-    return list(scoreFrameSegs(text, allBestSeg))
+def getSegScore(segsGold, segsProposal):
+    return list(scoreFrameSegs(segsGold, segsProposal))
 
-def getSegScores(text, allBestSeg, acoustic=False, out_file=None):
-    t0 = time.time()
-    scores = dict.fromkeys(allBestSeg.keys())
+def getSegScores(segsGold, segsProposal, acoustic=False, out_file=None):
+    scores = dict.fromkeys(segsProposal.keys())
     if not out_file:
         out_file = sys.stdout
     bm_tot = ba_tot = bP_tot = swm_tot = swa_tot = swP_tot = 0
-    for doc in sorted(allBestSeg.keys()):
-        if doc in text:
+    for doc in sorted(segsProposal.keys()):
+        if doc in segsGold:
             if acoustic:
-                scores[doc] = getSegScore(text[doc], allBestSeg[doc])
+                scores[doc] = getSegScore(segsGold[doc], segsProposal[doc])
                 (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = scores[doc] 
                 bm_tot, ba_tot, bP_tot = bm_tot+bm, ba_tot+ba, bP_tot+bP
                 swm_tot, swa_tot, swP_tot = swm_tot+swm, swa_tot+swa, swP_tot+swP
             else:
-                segmented = matToSegs(allBestSeg[doc], text[doc])
-                #print(segmented)
-                #print(text)
-
-                (bp,br,bf) = scoreBreaks(text[doc], segmented)
-                (swp,swr,swf) = scoreWords(text[doc], segmented)
-                (lp,lr,lf) = scoreLexicon(text[doc], segmented)
+                segmented = charSeq2WrdSeq(segsProposal[doc], segsGold[doc])
+                (bp,br,bf) = scoreBreaks(segsGold[doc], segmented)
+                (swp,swr,swf) = scoreWords(segsGold[doc], segmented)
+                (lp,lr,lf) = scoreLexicon(segsGold[doc], segmented)
+                scores[doc] = (bp,br,bf), (swp,swr,swf), (lp,lr,lf)
         else:
             print('Warning: Document ID "%s" in training data but not in gold. Skipping evaluation for this file.' %doc,file=out_file)
     if acoustic:
         bp,br,bf = precision_recall_f(bm_tot,ba_tot,bP_tot)
         swp,swr,swf = precision_recall_f(swm_tot,swa_tot,swP_tot)
         scores['##overall##'] = (bm_tot,ba_tot,bP_tot), (bp,br,bf), (swm_tot,swa_tot,swP_tot), (swp,swr,swf)
-    t1 = time.time()
     return scores
 
 def printSegScore(score, doc, acoustic=False, out_file=None):
+    if not out_file:
+        out_file = sys.stdout
     if acoustic:
         _, (bp,br,bf), _, (swp,swr,swf) = score
         print('Score for document "%s":' %doc, file=out_file)
@@ -398,12 +366,15 @@ def printSegScore(score, doc, acoustic=False, out_file=None):
     else:
         (bp,br,bf), (swp,swr,swf), (lp,lr,lf) = score
         print('Score for document "%s":' %doc, file=out_file)
-        print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
         print("BP %4.2f BR %4.2f BF %4.2f" % (100 * bp, 100 * br, 100 * bf), file=out_file)
+        print("SP %4.2f SR %4.2f SF %4.2f" % (100 * swp, 100 * swr, 100 * swf), file=out_file)
         print("LP %4.2f LR %4.2f LF %4.2f" % (100 * lp, 100 * lr, 100 * lf), file=out_file)
 
-def printSegScores(scores, acoustic=False, by_document=True, out_file=None):
+def printSegScores(scores, acoustic=False, out_file=None):
+    if not out_file:
+        out_file = sys.stdout
     print('Per-document scores:', file=out_file)
+    print(scores.keys())
     for doc in sorted(scores.keys()):
         if scores[doc] != None and doc != '##overall##':
             printSegScore(scores[doc], doc, acoustic, out_file)
