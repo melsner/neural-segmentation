@@ -374,7 +374,6 @@ def printSegScores(scores, acoustic=False, out_file=None):
     if not out_file:
         out_file = sys.stdout
     print('Per-document scores:', file=out_file)
-    print(scores.keys())
     for doc in sorted(scores.keys()):
         if scores[doc] != None and doc != '##overall##':
             printSegScore(scores[doc], doc, acoustic, out_file)

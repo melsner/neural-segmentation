@@ -1,5 +1,11 @@
 import sys, numpy as np
-from numpy import ma
+from numpy import ma, inf, nan
+
+def getRandomPermutation(n):
+    p = np.random.permutation(np.arange(n))
+    p_inv = np.zeros_like(p)
+    p_inv[p] = np.arange(n)
+    return p, p_inv
 
 def sampleSeg(pSegs):
     smp = np.random.uniform(size=pSegs.shape)
@@ -11,30 +17,182 @@ def sampleSegs(pSegs):
         segs[doc] = sampleSeg(pSegs[doc])
     return segs
 
-def lossByUtt(model, Xb, yb, BATCH_SIZE, metric="logprob"):
-    preds = ma.array(model.predict(Xb, batch_size=BATCH_SIZE, verbose=0), mask=ma.getmask(yb))
+def lossXUtt(model, Xae, Yae, batch_size, metric="logprob"):
+    preds = model.predict(Xae, batch_size=batch_size)
 
     if metric == "logprob":
         logP = np.log(preds)
-        pRight = logP * yb
-        # Sum out char, len(chars)
-        return pRight.sum(axis=(2, 3))
-    elif metric in ['mse', 'mse1best']:
-        se = (preds - yb) ** 2
-        # Sum out char, len(chars)
-        mse = np.mean(se, axis=(2, 3))
-        return mse
+        loss = logP * Yae
+        ## Sum out char, len(chars)
+        loss *= Xae.any(-1, keepdims=True)
+        loss = loss.sum(axis=(2, 3))
+    elif metric == 'mse':
+        se = (preds - Yae) ** 2
+        ## Sum out char, len(chars)
+        se *= Xae.any(-1, keepdims=True)
+        loss = np.mean(se, axis=(2, 3))
     else:
         raise ValueError('''The loss metric you have requested ("%s") is not supported.
                             Supported metrics are "logprob" and "mse".''')
 
+    ## Zero out losses from padding regions
+    return loss
 
-def guessSegTargets(scores, segs, priorSeg, algorithm='importance', verbose=True):
+class Node(object):
+    def __init__(self, t=None):
+        self.t = t
+        self.outgoing = set()
+        self.score = -inf
+        self.prev = None
+
+    def __str__(self):
+        return str(self.t)
+
+class Edge(object):
+    def __init__(self, a, b, wt):
+        self.a = a
+        self.b = b
+        self.wt = wt
+
+    def __str__(self):
+        return str(self.a) + '->' + str(self.b) + ' (' + str(self.wt) + ')'
+
+class Lattice(object):
+    def __init__(self):
+        self.nodes = {}
+        self.edges = {}
+
+    def __str__(self):
+        string = 'Nodes:\n'
+        for n in self.nodes:
+            string += str(self.nodes[n]) + '\n'
+        string += '\nEdges:\n'
+        for e in self.edges:
+            string += str(self.edges[e]) + '\n'
+        return string
+
+    def addNode(self, key):
+        if key not in self.nodes:
+            self.nodes[key] = Node(key)
+
+    def addEdge(self, a, b, wt):
+        key = (a,b)
+        if key in self.edges:
+            if self.edges[key].wt < wt:
+                self.edges[key].wt = wt
+        else:
+            self.edges[key] = Edge(a, b, wt)
+            a.outgoing.add(b)
+
+    def length(self, a, b):
+        if a == b:
+            return 0
+        return self.edges[(a,b)].wt
+
+    def dijkstra(self):
+        Q = set(self.nodes.values())
+        u = self.nodes['start']
+        u.score = 0
+        while len(Q) > 0:
+            maxQ = -inf
+            argmaxQ = None
+            for x in Q:
+                if x.score > maxQ:
+                    maxQ = x.score
+                    argmaxQ = x
+            u = argmaxQ
+            if u == None:
+                Q = set(self.nodes.values())
+                for x in Q:
+                    print(self)
+                    print(x.t)
+                    print(x.prev)
+                    print(x.score)
+                    print('')
+            Q.remove(u)
+            if u.t == 'end':
+                break
+            for v in u.outgoing:
+                score = u.score + self.length(u,v)
+                if score > v.score:
+                    v.score = score
+                    v.prev = u
+        segseq = []
+        finalscore = u.score
+        while u.prev != None:
+            u = u.prev
+            if u.t != 'start':
+                segseq.insert(0, u.t)
+        return segseq, finalscore
+
+def getViterbiWordScore(score, wLen, maxLen, delWt, oneLetterWt, segWt):
+    score -= max(0, wLen-maxLen) * delWt
+    score -= (wLen==1) * oneLetterWt
+    score -= segWt
+    return score
+
+def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
+    uttLen = segs.shape[1] - Xs_mask.sum()
+
+    ## Construct lattice
+    lattice = Lattice()
+    lattice.addNode('start')
+    lattice.addNode('end')
+
+    for s in range(segs.shape[0]):
+        src = lattice.nodes['start']
+        w = -1
+        t = 0
+        while t <= segs.shape[1]:
+            if t < segs.shape[1]:
+                seg = segs[s,t]
+                label = t
+            else:
+                seg = 1
+                label = 'end'
+            if seg == 1:
+                lattice.addNode(label)
+                dest = lattice.nodes[label]
+                if w >= 0:
+                    wt = scores[s, w]
+                    wLen = min(t,uttLen)-max(0,src.t)
+                    wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt) * wLen
+                else:
+                    wt = 0
+                lattice.addEdge(src, dest, wt)
+                w += 1
+            if w >= scores.shape[1] - 1:
+                lattice.addNode('end')
+                dest = lattice.nodes['end']
+                wt = scores[s, w]
+                wLen = min(t, uttLen) - max(0, src.t)
+                wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt) * wLen
+                lattice.addEdge(src, dest, wt)
+                print(lattice)
+                break
+            t += 1
+            src = dest
+
+    #print('')
+    #print(lattice)
+    #print(scores)
+    #print(segs)
+
+    ## Shortest path
+    segsOut = np.zeros((segs.shape[1]))
+    segseq, finalscore = lattice.dijkstra()
+    segsOut[segseq] = 1
+    #print(segsOut)
+    #print(finalscore)
+    #raw_input('Press any key to continue')
+
+    return np.expand_dims(segsOut, -1), finalscore
+
+def guessSegTargets(scores, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen=inf, delWt=0, oneLetterWt=0, segWt=0, verbose=True):
     if algorithm in ['importance', '1best']:
-        scores = np.array(scores)
         scores = scores.sum(-1)
-        MM = np.max(scores.sum(-1), axis=0, keepdims=True)
-        eScores = np.exp(scores - MM)
+        MM = np.max(scores, axis=1, keepdims=True)
+        eScores = np.exp(scores - MM + 1e-5)
         # approximately the probability of the sample given the data
         samplePrior = eScores / eScores.sum(axis=1, keepdims=True)
         bestSampleXUtt = np.argmax(samplePrior, axis=1)
@@ -48,14 +206,14 @@ def guessSegTargets(scores, segs, priorSeg, algorithm='importance', verbose=True
         bestSamplePrior /= len(bestSampleXUtt)
         bestSegXUtt = np.array(bestSegXUtt)
         if verbose:
-            print('      Best segmentation set: score = %s, prob = %s, num segs = %s' % (
+            print('Best segmentation set: score = %s, prob = %s, num segs = %s' % (
             bestSampleScore, bestSamplePrior, bestSegXUtt.sum()))
 
         if algorithm == '1best':
-            return bestSegXUtt, bestSegXUtt
+            return bestSegXUtt, bestSegXUtt ## Seg targets (1st output) and best segmentation (2nd output) are identical.
 
-        # proposal prob
-        priorSeg = np.expand_dims(priorSeg, 1)
+        ## Proposal prob
+        priorSeg = np.expand_dims(np.squeeze(priorSeg, -1), 1)
         qSeg = segs * priorSeg + (1 - segs) * (1 - priorSeg)
 
         wts = np.expand_dims(samplePrior, -1) / qSeg
@@ -84,8 +242,8 @@ def guessSegTargets(scores, segs, priorSeg, algorithm='importance', verbose=True
         #    print("weight", wts[si, 0])
         #    print("contrib", wtSegs[si, 0])
 
-        segWts = np.expand_dims(wtSegs.sum(axis=1), -1)
-        bestSampleXUtt = segWts > .5
+        segTargetsXUtt = np.expand_dims(wtSegs.sum(axis=1), -1)
+        bestSampleXUtt = segTargetsXUtt > .5
 
         # print("        Difference between best sample and guessed best", np.sum(segs[best_score]-best))
         # print("        Total segmentations (best sample)", np.sum(segs[best_score]))
@@ -93,13 +251,28 @@ def guessSegTargets(scores, segs, priorSeg, algorithm='importance', verbose=True
 
         # print("top row of wt segs", segWts[0])
         # print("max segs", best[0])
+    elif algorithm == 'viterbi':
+        bestSampleXUtt = np.zeros_like(priorSeg)
+        for i in range(len(scores)):
+            bestSampleXUtt[i], utt_score = viterbiDecode(segs[i],
+                                                         scores[i],
+                                                         Xs_mask[i],
+                                                         maxLen,
+                                                         delWt,
+                                                         oneLetterWt,
+                                                         segWt)
+            if False:
+                print('Viterbi score non-maximal!')
+                print('Best sampled score for utterance %d: %s' %(i, np.max(np.sum(scores[i], -1))))
+                print('Viterbi 1-best score for utterance %d: %s' %(i, utt_score))
+        segTargetsXUtt = bestSampleXUtt
     else:
         raise ValueError('''The sampling algorithm you have requested ("%s") is not supported.'
                             Please use one of the following:
 
                             importance
                             1best''')
-    return segWts, bestSampleXUtt
+    return segTargetsXUtt, bestSampleXUtt
 
 
 def KL(pSeg1, pSeg2):

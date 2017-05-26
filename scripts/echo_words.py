@@ -22,7 +22,7 @@ class CharacterTable(object):
         # Arguments
             chars: Characters that can appear in the input.
         """
-        self.chars = sorted(set(chars))
+        self.chars = ['X'] + sorted(set(chars) - set(['X']))
         self.char_indices = dict((c, i) for i, c in enumerate(self.chars))
         self.indices_char = dict((i, c) for i, c in enumerate(self.chars))
 

@@ -17,35 +17,39 @@ def getMasks(segmented):
     return masks
 
 def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, check_output=False):
+    acoustic = Xs[0,-10:,:].sum() != 10
     Xae = np.split(Xs, len(Xs))
     FRAME_SIZE = Xs.shape[-1]
     deletedChars = np.zeros((len(Xae), maxUtt))
     oneLetter = np.zeros(len(Xae))
     for i,utt in enumerate(Xae):
         utt_target = np.zeros((maxUtt, maxLen, FRAME_SIZE))
-        utt = np.squeeze(utt, 0)[np.logical_not(Xs_mask[i])]
+        utt = np.squeeze(utt, 0)
+        utt = utt[np.logical_not(Xs_mask[i])]
         utt = np.split(utt, np.where(segs[i,:len(utt)])[0])
         if len((utt[0])) == 0:
             utt.pop(0)
         n_words = min(len(utt), maxUtt)
+        padwords = maxUtt - n_words
         for j in xrange(n_words):
             w_len = min(len(utt[j]), maxLen)
             w_target = np.zeros((maxLen, FRAME_SIZE))
             deletedChars[i,j] += max(0, len(utt[j]) - maxLen)
             oneLetter[i] += int(w_len == 1)
-            w_target[:w_len,:] = utt[j][:w_len]
+            w_target[:w_len] = utt[j][:w_len]
             utt[j] = w_target
-            utt_target[j,:] = utt[j]
+            utt_target[padwords + j] = utt[j]
         extraWDel = 0
         for j in xrange(maxUtt, len(utt)):
             extraWDel += len(utt[j])
-        ## Uniformly distribute clipping penalty for excess words
+        ## Uniformly distribute clipping penaresh2lty for excess words
         deletedChars[i,:] += float(extraWDel) / maxUtt
         Xae[i] = utt_target
     Xae = np.stack(Xae)
     ## NOTE: Reconstitution will fail if there has been any clipping.
     ## Do not use this feature unless maxutt and maxlen are large enough
     ## to make clipping very unlikely.
+    ## Currently only works in acoustic mode.
     if check_output:
         for i in xrange(len(Xs)):
             src = Xs[i][np.logical_not(Xs_mask[i])]
@@ -60,20 +64,35 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, check_output=False):
                        Source region: %s\n Reconstituted region: %s''' \
                        %(j, src[j-1:j+2], reconstituted[j-1:j+2])
 
+
+    if not acoustic:
+        padchar = np.zeros(FRAME_SIZE)
+        padchar[0] = 1
+        Xae[np.where(np.logical_not(Xae.any(-1)))] = padchar
+
     return Xae, deletedChars, oneLetter
 
 def XsSegs2Xae(Xs, Xs_mask, segs, maxUtt, maxLen):
-    X = dict.fromkeys(Xs.keys())
-    deletedChars = dict.fromkeys(Xs.keys())
-    oneLetter = dict.fromkeys(Xs.keys())
+    Xae = []
+    deletedChars = []
+    oneLetter = []
     for doc in Xs:
-        X[doc], deletedChars[doc], oneLetter[doc] = XsSeg2Xae(Xs[doc],
-                                                              Xs_mask[doc],
-                                                              segs[doc],
-                                                              maxUtt,
-                                                              maxLen)
-    return X, deletedChars, oneLetter
+        Xae_doc, deletedChars_doc, oneLetter_doc = XsSeg2Xae(Xs[doc],
+                                                             Xs_mask[doc],
+                                                             segs[doc],
+                                                             maxUtt,
+                                                             maxLen)
+        Xae.append(Xae_doc)
+        deletedChars.append(deletedChars_doc)
+        oneLetter.append(oneLetter_doc)
+    return np.concatenate(Xae), np.concatenate(deletedChars), np.concatenate(oneLetter)
 
+def getYae(Xae, reverseUtt, acoustic=False):
+    if reverseUtt:
+        Yae = np.flip(Xae, 1)
+    else:
+        Yae = Xae
+    return Yae
 
 
 
@@ -83,34 +102,40 @@ def text2Xs(text, maxChar, ctable):
     nUtts = len(text)
     Xs = np.zeros((nUtts, maxChar, ctable.dim()), dtype=np.bool)
     for ui, utt in enumerate(text):
-        Xs[ui] = ctable.encode(utt[:maxChar], maxChar)
+        Xs[ui] = ctable.encode(pad(utt[:maxChar], maxChar, "X"), maxChar)
+        #Xs[ui] = ctable.encode(utt[:maxChar], maxChar)
     return Xs
 
 def texts2Xs(text, maxChar, ctable):
-    Xs = dict.fromkeys(text.keys())
+    utts = []
+    doc_indices = dict.fromkeys(text.keys())
+    ix = 0
     for doc in text:
-        Xs[doc] = text2Xs(text[doc], maxChar, ctable)
-    return Xs
+        utts_doc = text2Xs(text[doc], maxChar, ctable)
+        utts.append(utts_doc)
+        doc_indices[doc] = (ix, ix + len(utts_doc))
+        ix += len(utts_doc)
+    return np.concatenate(utts), doc_indices
 
 def text2Segs(text, maxChar):
-    nUtts = len(text)
     segs = []
     for utt in text:
         seg = np.zeros((maxChar,1))
-        cur_ix = -1
+        cur_ix = 0
         for w in utt:
+            seg[cur_ix] = 1
             cur_ix += len(w)
             if cur_ix >= maxChar:
                 break
-            seg[cur_ix] = 1
         segs.append(seg)
     return np.stack(segs)
 
 def texts2Segs(text, maxChar):
-    segs = dict.fromkeys(text.keys())
+    segs = []
     for doc in text:
-        segs[doc] = text2Segs(text[doc], maxChar)
-    return segs
+        segs_doc = text2Segs(text[doc], maxChar)
+        segs.append(segs_doc)
+    return np.concatenate(segs)
 
 def batchIndices(Xt, batchSize):
     xN = Xt.shape[0]
@@ -142,6 +167,7 @@ def reconstructUtt(charSeq, segs, maxUtt, wholeSent=False):
     uttWds = np.where(segs)[0][:maxUtt]
     words = []
     s = 0
+    print(segs)
     for i in range(len(uttWds)):
         s = uttWds[i]
         if i == len(uttWds)-1:
@@ -170,6 +196,43 @@ def realize(rText, maxlen, maxutt):
 
     return " ".join(items)
 
+def reconstructXs(Xs, ctable):
+    reconstruction = []
+    Xs_charids = Xs.argmax(-1)
+    for i in range(len(Xs_charids)):
+        utt = ''
+        for j in range(len(Xs_charids[i])):
+            utt += ctable.indices_char[int(Xs_charids[i,j])]
+        reconstruction.append(utt)
+    return reconstruction
+
+def reconstructXae(Xae, ctable):
+    reconstruction = []
+    Xae_charids = Xae.argmax(-1)
+    for i in range(len(Xae_charids)):
+        reconstruction.append([])
+        for j in range(len(Xae_charids[i])):
+            word = ''
+            for k in range(len(Xae_charids[i,j])):
+                word += ctable.indices_char[int(Xae_charids[i,j,k])]
+            reconstruction[-1].append(word)
+        reconstruction[-1] = ' '.join(reconstruction[-1])
+    return reconstruction
+
+def printReconstruction(n, model, Xae, ctable, batch_size, reverseUtt):
+    Yae = getYae(Xae, reverseUtt, False)
+    preds = model.predict(Xae[:n], batch_size=batch_size)
+    print('Sum of autoencoder predictions: %s' % preds.sum())
+    if reverseUtt:
+        preds = np.flip(preds, 1)
+    input_reconstruction = reconstructXae(Xae[:n], ctable)
+    target_reconstruction = reconstructXae(Yae[:n], ctable)
+    output_reconstruction = reconstructXae(preds[:n], ctable)
+    for utt in range(n):
+        print('Input:          %s' %input_reconstruction[utt])
+        print('Target:         %s' %target_reconstruction[utt])
+        print('Network:        %s' %output_reconstruction[utt])
+        print('')
 
 
 
@@ -265,7 +328,7 @@ def frameInput2Utts(raw, vadBreaks, maxChar):
     s = 0
     Xs = []
     while s < raw.shape[0]:
-        s, e = getNextFrameUtt(vadBreaks, maxChar, start_ix=s)
+        e = getNextFrameUtt(vadBreaks, maxChar, start_ix=s)
         Xseg_batch = np.zeros((maxChar, frame_len))
         Xseg_batch[:e - s, :] = raw[s:e, :]
         Xs.append(Xseg_batch)
@@ -273,29 +336,37 @@ def frameInput2Utts(raw, vadBreaks, maxChar):
     return np.stack(Xs)
 
 def frameInputs2Utts(raw, vadBreaks, maxChar):
-    Xs = dict.fromkeys(raw.keys())
-    for doc in Xs:
-        Xs[doc] = frameInput2Utts(raw[doc], vadBreaks[doc], maxChar)
-    return Xs
+    utts = []
+    doc_indices = dict.fromkeys(raw.keys())
+    ix = 0
+    for doc in doc_indices:
+        utts_doc = frameInput2Utts(raw[doc], vadBreaks[doc], maxChar)
+        utts.append(utts_doc)
+        doc_indices[doc] = (ix, ix+len(utts_doc))
+        ix += len(utts_doc)
+    return np.concatenate(utts), doc_indices
 
 def frameSeg2FrameSegXUtt(framesegs, vadBreaks, maxChar):
     s = 0
     Yseg = []
     while s < framesegs.shape[0]:
-        s, e = getNextFrameUtt(vadBreaks, maxChar, start_ix=s)
+        e = getNextFrameUtt(vadBreaks, maxChar, start_ix=s)
         Yseg_batch = np.zeros(maxChar)
         Yseg_batch[:e - s] = framesegs[s:e]
-        Yseg.append(Yseg_batch)
+        Yseg.append(Yseg_batch[:,None])
         s = e
     Yseg = np.stack(Yseg)
     return Yseg
 
-def frameSegs2FrameSegsXUtt(framesegs, vadBreaks, maxChar):
-    doc_list = list(framesegs.keys())
-    Yseg = dict.fromkeys(doc_list)
-    for doc in doc_list:
-        Yseg[doc] = frameSeg2FrameSegXUtt(framesegs[doc], vadBreaks[doc], maxChar)
-    return Yseg
+def frameSegs2FrameSegsXUtt(framesegs, vadBreaks, maxChar, doc_indices):
+    Ysegs = dict.fromkeys(framesegs.keys())
+    for doc in Ysegs:
+        Ysegs[doc] = frameSeg2FrameSegXUtt(framesegs[doc], vadBreaks[doc], maxChar)
+    Xs = np.zeros((sum([len(Ysegs[d]) for d in Ysegs]), maxChar, 1))
+    for doc in doc_indices:
+        s, e = doc_indices[doc]
+        Xs[s:e] = Ysegs[doc]
+    return Xs
 
 def intervals2ForcedSeg(intervals):
     out = dict.fromkeys(intervals)
@@ -315,12 +386,10 @@ def intervals2ForcedSeg(intervals):
     return out
 
 def getNextFrameUtt(vad_breaks, BATCH_SIZE, start_ix=0):
-    if start_ix + BATCH_SIZE >= len(vad_breaks):
-        return start_ix, len(vad_breaks)
-    end_ix = start_ix + 1 + np.argmax(vad_breaks[start_ix+1:]) ## Gets first occurrence
+    end_ix = start_ix + 1 + np.argmax(vad_breaks[start_ix+1:]) if vad_breaks[start_ix+1:].sum() > 0 else len(vad_breaks)
     if end_ix > start_ix + BATCH_SIZE:
-        return start_ix, start_ix + BATCH_SIZE
-    return start_ix, end_ix
+        return start_ix + BATCH_SIZE
+    return end_ix
 
 def seg2pSegWithForced(segs, vad_breaks, alpha=0.05):
     assert alpha >= 0.0 and alpha <= 0.5, 'Illegal value of alpha (0 <= alpha <= 0.5)'

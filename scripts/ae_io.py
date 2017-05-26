@@ -31,7 +31,7 @@ def readText(path):
     else:
         text = [xx.strip().split() for xx in lines]
         chars = ["".join(utt) for utt in text]
-        charset = set("".join(chars))
+        charset = set("".join(chars + ['X']))
 
     return text, chars, charset
 
