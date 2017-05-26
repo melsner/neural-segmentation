@@ -167,7 +167,6 @@ def reconstructUtt(charSeq, segs, maxUtt, wholeSent=False):
     uttWds = np.where(segs)[0][:maxUtt]
     words = []
     s = 0
-    print(segs)
     for i in range(len(uttWds)):
         s = uttWds[i]
         if i == len(uttWds)-1:
