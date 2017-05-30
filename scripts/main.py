@@ -209,9 +209,9 @@ if __name__ == "__main__":
     maxChar = checkpoint.get('maxChar', int(args.maxChar) if args.maxChar else 500 if ACOUSTIC else 30)
     maxUtt = checkpoint.get('maxUtt', int(args.maxUtt) if args.maxUtt else 50 if ACOUSTIC else 10)
     maxLen = checkpoint.get('maxLen', int(args.maxLen) if args.maxLen else 100 if ACOUSTIC else 7)
-    pretrainIters = checkpoint.get('pretrainIters', int(args.pretrainIters) if args.pretrainIters else 10 if ACOUSTIC else 10)
-    trainNoSegIters = checkpoint.get('trainNoSegIters', int(args.trainNoSegIters) if args.trainNoSegIters else 10 if ACOUSTIC else 10)
-    trainIters = checkpoint.get('trainIters', int(args.trainIters) if args.trainIters else 100 if ACOUSTIC else 80)
+    pretrainIters = int(args.pretrainIters) if args.pretrainIters else 10 if ACOUSTIC else 10
+    trainNoSegIters = int(args.trainNoSegIters) if args.trainNoSegIters else 10 if ACOUSTIC else 10
+    trainIters = int(args.trainIters) if args.trainIters else 100 if ACOUSTIC else 80
     METRIC = checkpoint.get('metric', args.metric if args.metric else 'mse' if ACOUSTIC else 'logprob')
     DEL_WT = checkpoint.get('delWt', float(args.delWt) if args.delWt else 1 if ACOUSTIC else 50)
     ONE_LETTER_WT = checkpoint.get('oneLetterWt', float(args.oneLetterWt) if args.oneLetterWt else 50 if ACOUSTIC else 10)
@@ -356,7 +356,7 @@ if __name__ == "__main__":
     ## Zero-out segmentation probability in padding regions
     pSegs[np.where(Xs_mask)] = 0.
     ## Data loading finished, save checkpoint
-    with open(logdir + '/checkpoint.obj', 'wb') as f:
+    with open(logdir + '/checkpoint.obj', 'ab') as f:
         checkpoint['iteration'] = iteration
         pickle.dump(checkpoint, f)
 
@@ -475,9 +475,9 @@ if __name__ == "__main__":
         model.compile(loss="mean_squared_error",
                       optimizer='adam')
     else:
-        model.compile(loss=masked_categorical_crossentropy,
+        model.compile(loss="categorical_crossentropy",
                       optimizer='adam',
-                      metrics=[masked_categorical_accuracy])
+                      metrics=["accuracy"])
     model.summary()
 
     ## 2. Segmenter
@@ -723,18 +723,20 @@ if __name__ == "__main__":
             print('Timesteps + deleted: %s (should be %s)' % (out.any(-1).sum() + int(deletedChars.sum()), sum([raw_cts[doc] for doc in raw_cts])))
             print('')
 
-        model.save(logdir + '/model.h5')
-        with open(logdir + '/checkpoint.obj', 'wb') as f:
-            checkpoint['iteration'] = iteration
-            pickle.dump(checkpoint, f)
-
-        if not ACOUSTIC:
-            printReconstruction(10, model, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
-
         iteration += 1
         if iteration == pretrainIters:
             pretrain = False
             iteration = 0
+
+        model.save(logdir + '/model.h5')
+        with open(logdir + '/checkpoint.obj', 'wb') as f:
+            checkpoint['iteration'] = iteration
+            checkpoint['pretrain'] = pretrain
+            pickle.dump(checkpoint, f)
+
+        if not ACOUSTIC:
+            preds = model.predict(Xae[:10])
+            printReconstruction(10, model, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
 
     ## Pretraining finished, update checkpoint
     with open(logdir + '/checkpoint.obj', 'wb') as f:
@@ -747,8 +749,17 @@ if __name__ == "__main__":
     segScores['phn']['##overall##'] = [(0,0,0), None, (0,0,0), None]
     print()
 
+    N_BATCHES = math.ceil(len(Xs)/SAMPLING_BATCH_SIZE)
+
     print('Training networks jointly')
     while iteration < trainIters:
+
+        it0 = time.time()
+
+        if iteration < trainNoSegIters:
+            print('Using initialization as proposal distribution.')
+        else:
+            print('Using segmenter network as proposal distribution.')
 
         segsProposal = []
         deletedChars = []
@@ -761,7 +772,7 @@ if __name__ == "__main__":
 
         print()
         print('-' * 50)
-        print('Iteration', iteration)
+        print('Iteration', iteration + 1)
 
         ## Randomly permute samples
         p, p_inv = getRandomPermutation(len(Xs))
@@ -773,16 +784,16 @@ if __name__ == "__main__":
 
         for b in range(0, len(Xs), SAMPLING_BATCH_SIZE):
 
+            bt0 = time.time()
+
             Xs_batch = Xs[b:b+SAMPLING_BATCH_SIZE]
             Xs_mask_batch = Xs_mask[b:b+SAMPLING_BATCH_SIZE]
             if ACOUSTIC:
                 vad_batch = vad[b:b+SAMPLING_BATCH_SIZE]
 
             if iteration < trainNoSegIters:
-                print('Using initialization as proposal distribution.')
                 pSegs_batch = pSegs[b:b+SAMPLING_BATCH_SIZE]
             else:
-                print('Using segmenter network as proposal distribution.')
                 pSegs_batch = segmenter.predict(Xs_batch, batch_size = BATCH_SIZE)
                 pSegs_batch = .9 * pSegs_batch + .1 * .5 * np.ones(pSegs_batch.shape)
                 if ACOUSTIC:
@@ -792,10 +803,11 @@ if __name__ == "__main__":
                 ## Zero-out segmentation probability in padding regions
                 pSegs_batch[np.where(Xs_mask_batch)] = 0.
 
-            ts0 = time.time()
-            print('')
+            st0 = time.time()
             scores_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxUtt))
             segSamples_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxChar))
+            print()
+            print('Batch %d/%d' %((b+1)/SAMPLING_BATCH_SIZE+1, N_BATCHES))
             for s in range(N_SAMPLES):
                 sys.stdout.write('\rSample %d/%d' %(s+1, N_SAMPLES))
                 sys.stdout.flush()
@@ -816,8 +828,6 @@ if __name__ == "__main__":
                     scores_batch[:,s,:] -= (oneLetter_batch / maxUtt)[:, None] * ONE_LETTER_WT
                     scores_batch[:,s,:] -= (np.squeeze(segs_batch, -1).sum(-1, keepdims=True) / maxUtt) * SEG_WT
 
-            ts1 = time.time()
-
             print('')
             print('Computing segmentation targets from samples')
             segProbs_batch, segsProposal_batch = guessSegTargets(scores_batch,
@@ -830,7 +840,8 @@ if __name__ == "__main__":
                                                                  ONE_LETTER_WT,
                                                                  SEG_WT)
 
-            print('Sampling completed in %ds.' %(ts1-ts0))
+            st1 = time.time()
+            print('Sampling time: %.2fs.' %(st1-st0))
 
             Xae_batch, deletedChars_batch, oneLetter_batch = XsSeg2Xae(Xs_batch,
                                                                        Xs_mask_batch,
@@ -852,7 +863,7 @@ if __name__ == "__main__":
                           batch_size=BATCH_SIZE,
                           epochs=1)
 
-            epochLoss = h.history['loss'][0]
+            epochLoss += h.history['loss'][0]
             epochDel += int(deletedChars_batch.sum())
             epochOneL += int(oneLetter_batch.sum())
             epochSeg += int(segsProposal_batch.sum())
@@ -861,7 +872,10 @@ if __name__ == "__main__":
             deletedChars.append(deletedChars_batch)
             oneLetter.append(oneLetter_batch)
 
-        epochLoss /= (len(Xs)/SAMPLING_BATCH_SIZE)
+            bt1 = time.time()
+            print('Batch time: %.2fs' %(bt1-bt0))
+
+        epochLoss /= (N_BATCHES)
         segsProposal = np.concatenate(segsProposal)
         deletedChars = np.concatenate(deletedChars)
         oneLetter = np.concatenate(oneLetter)
@@ -875,6 +889,8 @@ if __name__ == "__main__":
         segsProposal = segsProposal[p_inv]
         deletedChars = deletedChars[p_inv]
         oneLetter = oneLetter[p_inv]
+
+        iteration += 1
 
         model.save(logdir + '/model.h5')
         segmenter.save(logdir + '/segmenter.h5')
@@ -899,19 +915,8 @@ if __name__ == "__main__":
                 masked_proposal = np.ma.array(segsProposalXDoc[doc], mask=Xs_mask[s:e])
                 segsProposalXDoc[doc] = masked_proposal.compressed()
 
-        #for doc in doc_indices:
-        #    s, e = doc_indices[doc]
-        #    for i in range(e-s):
-        #        print(raw[doc][i])
-        #        print(len(raw[doc][i]))
-        #        print((1-Xs_mask[s+i:s+i+1]).sum())
-        #        print(pSegs[s+i:s+i+1])
-        #        print(Xs_mask[s+i:s+i+1])
-        #        print(segsProposalXDoc[doc][i])
-        #        raw_input()
-
         segScore = writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg,
-                            gold, segsProposalXDoc, logdir, intervals if ACOUSTIC else None, ACOUSTIC, print_headers=iteration == 0)
+                            gold, segsProposalXDoc, logdir, intervals if ACOUSTIC else None, ACOUSTIC, print_headers=iteration == 1)
 
 
         if ACOUSTIC:
@@ -932,8 +937,9 @@ if __name__ == "__main__":
             writeSolutions(logdir, model, segmenter,
                            segsProposalXDoc[doc_list[0]], gold[doc_list[0]], iteration)
 
-        doc_ix = 0
-        iteration += 1
+
+        it1 = time.time()
+        print('Iteration time: %.2fs' %(it1-it0))
 
     print("Logs in", logdir)
 

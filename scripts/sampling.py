@@ -30,7 +30,7 @@ def lossXUtt(model, Xae, Yae, batch_size, metric="logprob"):
         se = (preds - Yae) ** 2
         ## Sum out char, len(chars)
         se *= Xae.any(-1, keepdims=True)
-        loss = np.mean(se, axis=(2, 3))
+        loss = -np.mean(se, axis=(2, 3))
     else:
         raise ValueError('''The loss metric you have requested ("%s") is not supported.
                             Supported metrics are "logprob" and "mse".''')
@@ -168,7 +168,6 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
                 wLen = min(t, uttLen) - max(0, src.t)
                 wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt) * wLen
                 lattice.addEdge(src, dest, wt)
-                print(lattice)
                 break
             t += 1
             src = dest
@@ -252,26 +251,23 @@ def guessSegTargets(scores, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen
         # print("top row of wt segs", segWts[0])
         # print("max segs", best[0])
     elif algorithm == 'viterbi':
-        bestSampleXUtt = np.zeros_like(priorSeg)
+        segTargetsXUtt = np.zeros_like(priorSeg)
         for i in range(len(scores)):
-            bestSampleXUtt[i], utt_score = viterbiDecode(segs[i],
+            segTargetsXUtt[i], utt_score = viterbiDecode(segs[i],
                                                          scores[i],
                                                          Xs_mask[i],
                                                          maxLen,
                                                          delWt,
                                                          oneLetterWt,
                                                          segWt)
-            if False:
-                print('Viterbi score non-maximal!')
-                print('Best sampled score for utterance %d: %s' %(i, np.max(np.sum(scores[i], -1))))
-                print('Viterbi 1-best score for utterance %d: %s' %(i, utt_score))
-        segTargetsXUtt = bestSampleXUtt
+        bestSampleXUtt = segTargetsXUtt
     else:
         raise ValueError('''The sampling algorithm you have requested ("%s") is not supported.'
                             Please use one of the following:
 
                             importance
-                            1best''')
+                            1best
+                            viterbi''')
     return segTargetsXUtt, bestSampleXUtt
 
 

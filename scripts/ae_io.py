@@ -155,7 +155,7 @@ def writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, text, segsProp
             (bp,br,bf) = scoreBreaks(text[doc], segmented)
             (swp,swr,swf) = scoreWords(text[doc], segmented)
             (lp,lr,lf) = scoreLexicon(text[doc], segmented)
-            with open(logdir+'log.txt', 'ab') as f:
+            with open(logdir+'/log.txt', 'ab') as f:
                 if print_headers:
                     print("\t".join([
                                     "iteration", "epochLoss", "epochDel",
@@ -168,8 +168,8 @@ def writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, text, segsProp
 
 ## Used only in text mode
 def writeSolutions(logdir, model, segmenter, allBestSeg, text, iteration):
-    model.save(logdir + "/model-%d.h5" % iteration)
-    segmenter.save(logdir + "/segmenter-%d.h5" % iteration)
+    #model.save(logdir + "/model-%d.h5" % iteration)
+    #segmenter.save(logdir + "/segmenter-%d.h5" % iteration)
 
     segmented = charSeq2WrdSeq(allBestSeg, text)
 
@@ -181,7 +181,7 @@ def writeSolutions(logdir, model, segmenter, allBestSeg, text, iteration):
         for line in segmented:
             print(" || ".join([" ".join(wi) for wi in line]), "||",
                   file=logfile)
-            logfile.close()
+    logfile.close()
 
 ## Used only in acoustic mode
 def writeTimeSeg(seg, out_file=sys.stdout, docname=None, TextGrid=False):

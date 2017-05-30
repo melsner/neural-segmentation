@@ -222,8 +222,6 @@ def printReconstruction(n, model, Xae, ctable, batch_size, reverseUtt):
     Yae = getYae(Xae, reverseUtt, False)
     preds = model.predict(Xae[:n], batch_size=batch_size)
     print('Sum of autoencoder predictions: %s' % preds.sum())
-    if reverseUtt:
-        preds = np.flip(preds, 1)
     input_reconstruction = reconstructXae(Xae[:n], ctable)
     target_reconstruction = reconstructXae(Yae[:n], ctable)
     output_reconstruction = reconstructXae(preds[:n], ctable)
