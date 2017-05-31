@@ -213,13 +213,13 @@ def writeTimeSeg(seg, out_file=sys.stdout, docname=None, TextGrid=False):
             else:
                 print('%s %s' %i, file=out_file)
 
-def writeTimeSegs(segs, out_file='./', TextGrid=False):
-    assert type(out_file) == str, 'out_file must be a directory path.'
-    out_path = out_file
+def writeTimeSegs(segs, out_dir='./', TextGrid=False):
+    assert type(out_dir) == str, 'out_file must be a directory path.'
+    out_dir = out_dir + '/'
     if TextGrid:
         suffix = '.TextGrid'
     else:
         suffix = '_seg.txt'
     for doc in segs:
-        with open(out_path + doc + suffix, 'wb') as f:
+        with open(out_dir + doc + suffix, 'wb') as f:
             writeTimeSeg(segs[doc], out_file=f, docname=doc, TextGrid=TextGrid)

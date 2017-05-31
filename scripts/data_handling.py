@@ -16,16 +16,14 @@ def getMasks(segmented):
         masks[doc] = getMask(segmented[doc])
     return masks
 
-def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, check_output=False):
-    acoustic = Xs[0,-10:,:].sum() != 10
+def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False, check_output=False):
     Xae = np.split(Xs, len(Xs))
     FRAME_SIZE = Xs.shape[-1]
     deletedChars = np.zeros((len(Xae), maxUtt))
     oneLetter = np.zeros(len(Xae))
     for i,utt in enumerate(Xae):
         utt_target = np.zeros((maxUtt, maxLen, FRAME_SIZE))
-        utt = np.squeeze(utt, 0)
-        utt = utt[np.logical_not(Xs_mask[i])]
+        utt = np.squeeze(utt, 0)[np.logical_not(Xs_mask[i])]
         utt = np.split(utt, np.where(segs[i,:len(utt)])[0])
         if len((utt[0])) == 0:
             utt.pop(0)
@@ -72,7 +70,7 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, check_output=False):
 
     return Xae, deletedChars, oneLetter
 
-def XsSegs2Xae(Xs, Xs_mask, segs, maxUtt, maxLen):
+def XsSegs2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False):
     Xae = []
     deletedChars = []
     oneLetter = []
@@ -81,7 +79,8 @@ def XsSegs2Xae(Xs, Xs_mask, segs, maxUtt, maxLen):
                                                              Xs_mask[doc],
                                                              segs[doc],
                                                              maxUtt,
-                                                             maxLen)
+                                                             maxLen,
+                                                             acoustic)
         Xae.append(Xae_doc)
         deletedChars.append(deletedChars_doc)
         oneLetter.append(oneLetter_doc)

@@ -74,10 +74,11 @@ def trainAEOnly(ae, Xs, Xs_mask, segs, trainIters, batch_size, logdir, reverseUt
 
     ## Preprocess input data
     Xae, deletedChars, oneLetter = XsSeg2Xae(Xs,
-                                              Xs_mask,
-                                              segs,
-                                              maxUtt,
-                                              maxLen)
+                                             Xs_mask,
+                                             segs,
+                                             maxUtt,
+                                             maxLen,
+                                             acoustic)
 
     ## Randomly permute samples
     p, p_inv = getRandomPermutation(len(Xae))
@@ -671,9 +672,10 @@ if __name__ == "__main__":
                                                  Xs_mask,
                                                  segs,
                                                  maxUtt,
-                                                 maxLen)
+                                                 maxLen,
+                                                 ACOUSTIC)
         ts1 = time.time()
-        print('Split time: %.2f' %(ts1-ts0))
+        print('Split time: %.2fs' %(ts1-ts0))
 
         ## Randomly permute samples
         p, p_inv = getRandomPermutation(len(Xae))
@@ -837,7 +839,8 @@ if __name__ == "__main__":
                                                                            Xs_mask_batch,
                                                                            segs_batch,
                                                                            maxUtt,
-                                                                           maxLen)
+                                                                           maxLen,
+                                                                           ACOUSTIC)
 
                 Yae_batch = getYae(Xae_batch, REVERSE_UTT, ACOUSTIC)
 
@@ -866,7 +869,8 @@ if __name__ == "__main__":
                                                                        Xs_mask_batch,
                                                                        segsProposal_batch,
                                                                        maxUtt,
-                                                                       maxLen)
+                                                                       maxLen,
+                                                                       ACOUSTIC)
 
             Yae_batch = getYae(Xae_batch, REVERSE_UTT, ACOUSTIC)
 
@@ -953,8 +957,8 @@ if __name__ == "__main__":
                 segScores['phn']['##overall##'][3] = precision_recall_f(*segScores['phn']['##overall##'][2])
                 print('Phone segmentation scores:')
                 printSegScores(segScore['phn'], ACOUSTIC)
-            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposal), out_file=logdir, TextGrid=False)
-            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposal), out_file=logdir, TextGrid=True)
+            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_file=logdir, TextGrid=False)
+            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_file=logdir, TextGrid=True)
         else:
             printSegScores(getSegScores(gold, segsProposalXDoc, ACOUSTIC), ACOUSTIC)
             writeSolutions(logdir, segsProposalXDoc[doc_list[0]], gold[doc_list[0]], iteration)
