@@ -403,7 +403,7 @@ if __name__ == "__main__":
         print('', file=f)
         print('Command line call to repro/resume:', file=f)
         print('', file=f)
-        print('python scripts/autoencodeDecodeChars.py',
+        print('python scripts/main.py',
               '%s' % dataDir,
               '--acoustic' if ACOUSTIC else '',
               '--noSegNet' if not SEG_NET else '',
@@ -791,6 +791,8 @@ if __name__ == "__main__":
         oneLetter = []
 
         epochLoss = 0
+        if not ACOUSTIC:
+            epochAcc = 0
         epochDel = 0
         epochOneL = 0
         epochSeg = 0
@@ -901,7 +903,8 @@ if __name__ == "__main__":
                 pSegs[b:b + SAMPLING_BATCH_SIZE] = segProbs_batch
 
             epochLoss += h.history['loss'][0]
-            exit()
+            if not ACOUSTIC:
+                epochAcc += h.history['acc'][0]
             epochDel += int(deletedChars_batch.sum())
             epochOneL += int(oneLetter_batch.sum())
             epochSeg += int(segsProposal_batch.sum())
@@ -914,6 +917,8 @@ if __name__ == "__main__":
             print('Batch time: %.2fs' %(bt1-bt0))
 
         epochLoss /= (N_BATCHES)
+        if not ACOUSTIC:
+            epochAcc /= (N_BATCHES)
         segsProposal = np.concatenate(segsProposal)
         deletedChars = np.concatenate(deletedChars)
         oneLetter = np.concatenate(oneLetter)
@@ -941,10 +946,12 @@ if __name__ == "__main__":
             pickle.dump(checkpoint, f)
 
         print('Total frames:', raw_total)
-        print("Loss:", epochLoss)
-        print("Deletions:", epochDel)
-        print("One letter words:", epochOneL)
-        print("Total segmentation points:", epochSeg)
+        print('Loss:', epochLoss)
+        if not ACOUSTIC:
+            print('Accuracy:', epochAcc)
+        print('Deletions:', epochDel)
+        print('One letter words:', epochOneL)
+        print('Total segmentation points:', epochSeg)
 
         segsProposalXDoc = dict.fromkeys(doc_list)
         for doc in segsProposalXDoc:
@@ -954,7 +961,7 @@ if __name__ == "__main__":
                 masked_proposal = np.ma.array(segsProposalXDoc[doc], mask=Xs_mask[s:e])
                 segsProposalXDoc[doc] = masked_proposal.compressed()
 
-        segScore = writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg,
+        segScore = writeLog(iteration, epochLoss, epochAcc if not ACOUSTIC else None, epochDel, epochOneL, epochSeg,
                             gold, segsProposalXDoc, logdir, intervals if ACOUSTIC else None, ACOUSTIC, print_headers=iteration == 1)
 
 

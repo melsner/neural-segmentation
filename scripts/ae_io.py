@@ -113,7 +113,7 @@ def readMFCCs(path, filter_file=None):
 
 
 ## WRITE METHODS
-def writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, text, segsProposal, logdir, intervals=None, acoustic=False, print_headers=False):
+def writeLog(iteration, epochLoss, epochAcc, epochDel, epochOneL, epochSeg, text, segsProposal, logdir, intervals=None, acoustic=False, print_headers=False):
     if acoustic:
         segsProposal = frameSegs2timeSegs(intervals, segsProposal)
         headers = ['iteration', 'epochLoss', 'epochDel', 'epochOneL', 'epochSeg']
@@ -158,13 +158,14 @@ def writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, text, segsProp
             with open(logdir+'/log.txt', 'ab') as f:
                 if print_headers:
                     print("\t".join([
-                                    "iteration", "epochLoss", "epochDel",
-                                    "epochOneL", "epochSeg",
+                                    "iteration", "epochLoss", "epochAcc",
+                                    "epochDel", "epochOneL", "epochSeg",
                                     "bp", "br", "bf", "swp", "swr", "swf",
                                     "lp", "lr", "lf"]), file=f)
                 print("\t".join(["%g" % xx for xx in [
-                                iteration, epochLoss, epochDel, epochOneL, epochSeg, bp, br, bf, swp, swr, swf,
-                                lp, lr, lf]]), file=f)
+                                iteration, epochLoss, epochAcc, epochDel, epochOneL, epochSeg,
+                                bp, br, bf, swp, swr, swf, lp, lr, lf
+                                ]]), file=f)
 
 ## Used only in text mode
 def writeSolutions(logdir, allBestSeg, text, iteration):
