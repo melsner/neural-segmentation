@@ -130,6 +130,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("dataDir")
     parser.add_argument("--acoustic", action='store_true')
+    parser.add_argument("--noSegNet", action='store_true')
     parser.add_argument("--supervisedSegmenter", action='store_true')
     parser.add_argument("--supervisedAE", action='store_true')
     parser.add_argument("--reverseUtt", action='store_true')
@@ -198,6 +199,7 @@ if __name__ == "__main__":
     ## Initialize system parameters
     dataDir = args.dataDir
     ACOUSTIC = checkpoint.get('acoustic', args.acoustic)
+    SEG_NET = checkpoint.get('segNet', not args.noSegNet)
     ALGORITHM = checkpoint.get('algorithm', args.algorithm)
     REVERSE_UTT = checkpoint.get('reverseUtt', args.reverseUtt)
     MASK_VALUE = 0 if ACOUSTIC else 1
@@ -226,6 +228,7 @@ if __name__ == "__main__":
     RNN = recurrent.LSTM
 
     checkpoint['acoustic'] = ACOUSTIC
+    checkpoint['segNet'] = SEG_NET
     checkpoint['algorithm'] = ALGORITHM
     checkpoint['reverseUtt'] = REVERSE_UTT
     checkpoint['wordHidden'] = wordHidden
@@ -377,6 +380,7 @@ if __name__ == "__main__":
                 print('  Gold phoneme segmentation file: %s' % GOLDPHN, file=f)
         else:
             print('  Input type: Text', file=f)
+        print('  Using segmenter network: %s' % SEG_NET, file=f)
         print('  Input data location: %s' % dataDir, file=f)
         print('  Autoencoder loss function: %s' % METRIC, file=f)
         print('  Word layer hidden units: %s' % wordHidden, file=f)
@@ -401,7 +405,8 @@ if __name__ == "__main__":
         print('python scripts/autoencodeDecodeChars.py',
               '%s' % dataDir,
               '--acoustic' if ACOUSTIC else '',
-              '--reverseUtt' if ACOUSTIC else '',
+              '--noSegNet' if not SEG_NET else '',
+              '--reverseUtt' if REVERSE_UTT else '',
               '--algorithm %s' % ALGORITHM,
               '--wordHidden %s' % wordHidden,
               '--uttHidden %s' % uttHidden,
@@ -484,14 +489,15 @@ if __name__ == "__main__":
     model.summary()
 
     ## 2. Segmenter
-    segmenter = Sequential()
-    segmenter.add(Masking(mask_value=0.0, input_shape=(maxChar, charDim)))
-    segmenter.add(RNN(segHidden, return_sequences=True, name="segmenter"))
-    segmenter.add(TimeDistributed(Dense(1)))
-    segmenter.add(Activation("sigmoid"))
-    segmenter.compile(loss="binary_crossentropy",
-                      optimizer="adam")
-    segmenter.summary()
+    if SEG_NET:
+        segmenter = Sequential()
+        segmenter.add(Masking(mask_value=0.0, input_shape=(maxChar, charDim)))
+        segmenter.add(RNN(segHidden, return_sequences=True, name="segmenter"))
+        segmenter.add(TimeDistributed(Dense(1)))
+        segmenter.add(Activation("sigmoid"))
+        segmenter.compile(loss="binary_crossentropy",
+                          optimizer="adam")
+        segmenter.summary()
 
     if load_models and os.path.exists(logdir + '/model.h5'):
         print('Autoencoder checkpoint found. Loading weights...')
@@ -499,12 +505,13 @@ if __name__ == "__main__":
     else:
         print('No autoencoder checkpoint found. Keeping default initialization.')
         model.save(logdir + '/model.h5')
-    if load_models and os.path.exists(logdir + '/segmenter.h5'):
-        print('Segmenter checkpoint found. Loading weights...')
-        segmenter.load_weights(logdir + '/segmenter.h5', by_name=True)
-    else:
-        print('No segmenter checkpoint found. Keeping default initialization.')
-        segmenter.save(logdir + '/segmenter.h5')
+    if SEG_NET:
+        if load_models and os.path.exists(logdir + '/segmenter.h5'):
+            print('Segmenter checkpoint found. Loading weights...')
+            segmenter.load_weights(logdir + '/segmenter.h5', by_name=True)
+        else:
+            print('No segmenter checkpoint found. Keeping default initialization.')
+            segmenter.save(logdir + '/segmenter.h5')
 
     ## Unit testing of segmenter network by training on gold segmentations
     if args.supervisedAE or args.supervisedSegmenter:
@@ -759,10 +766,20 @@ if __name__ == "__main__":
 
         it0 = time.time()
 
-        if iteration < trainNoSegIters:
-            print('Using initialization as proposal distribution.')
+        print()
+        print('-' * 50)
+        print('Iteration', iteration + 1)
+
+        if SEG_NET:
+            if iteration < trainNoSegIters:
+                print('Using initialization as proposal distribution.')
+            else:
+                print('Using segmenter network as proposal distribution.')
         else:
-            print('Using segmenter network as proposal distribution.')
+            if iteration == 0:
+                print('Using initialization as proposal distribution.')
+            else:
+                print('Using sampled probabilities as proposal distribution.')
 
         segsProposal = []
         deletedChars = []
@@ -772,10 +789,6 @@ if __name__ == "__main__":
         epochDel = 0
         epochOneL = 0
         epochSeg = 0
-
-        print()
-        print('-' * 50)
-        print('Iteration', iteration + 1)
 
         ## Randomly permute samples
         p, p_inv = getRandomPermutation(len(Xs))
@@ -794,7 +807,7 @@ if __name__ == "__main__":
             if ACOUSTIC:
                 vad_batch = vad[b:b+SAMPLING_BATCH_SIZE]
 
-            if iteration < trainNoSegIters:
+            if iteration < trainNoSegIters or not SEG_NET:
                 pSegs_batch = pSegs[b:b+SAMPLING_BATCH_SIZE]
             else:
                 pSegs_batch = segmenter.predict(Xs_batch, batch_size = BATCH_SIZE)
@@ -860,11 +873,14 @@ if __name__ == "__main__":
                           batch_size=BATCH_SIZE,
                           epochs=1)
 
-            print('Updating segmenter network')
-            segmenter.fit(Xs_batch,
-                          segProbs_batch,
-                          batch_size=BATCH_SIZE,
-                          epochs=1)
+            if SEG_NET:
+                print('Updating segmenter network')
+                segmenter.fit(Xs_batch,
+                              segProbs_batch,
+                              batch_size=BATCH_SIZE,
+                              epochs=1)
+            else:
+                pSegs[b:b + SAMPLING_BATCH_SIZE] = segProbs_batch
 
             epochLoss += h.history['loss'][0]
             epochDel += int(deletedChars_batch.sum())
@@ -896,7 +912,8 @@ if __name__ == "__main__":
         iteration += 1
 
         model.save(logdir + '/model.h5')
-        segmenter.save(logdir + '/segmenter.h5')
+        if SEG_NET:
+            segmenter.save(logdir + '/segmenter.h5')
         with open(logdir + '/checkpoint.obj', 'wb') as f:
             checkpoint['iteration'] = iteration
             checkpoint['segsProposal'] = segsProposal
@@ -937,8 +954,7 @@ if __name__ == "__main__":
             writeTimeSegs(frameSegs2timeSegs(intervals, segsProposal), out_file=logdir, TextGrid=True)
         else:
             printSegScores(getSegScores(gold, segsProposalXDoc, ACOUSTIC), ACOUSTIC)
-            writeSolutions(logdir, model, segmenter,
-                           segsProposalXDoc[doc_list[0]], gold[doc_list[0]], iteration)
+            writeSolutions(logdir, segsProposalXDoc[doc_list[0]], gold[doc_list[0]], iteration)
 
 
         it1 = time.time()

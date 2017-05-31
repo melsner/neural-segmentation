@@ -167,10 +167,7 @@ def writeLog(iteration, epochLoss, epochDel, epochOneL, epochSeg, text, segsProp
                                 lp, lr, lf]]), file=f)
 
 ## Used only in text mode
-def writeSolutions(logdir, model, segmenter, allBestSeg, text, iteration):
-    #model.save(logdir + "/model-%d.h5" % iteration)
-    #segmenter.save(logdir + "/segmenter-%d.h5" % iteration)
-
+def writeSolutions(logdir, allBestSeg, text, iteration):
     segmented = charSeq2WrdSeq(allBestSeg, text)
 
     logfile = file(logdir + "/segmented-%d.txt" % iteration, 'w')
