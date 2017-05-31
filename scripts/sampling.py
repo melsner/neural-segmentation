@@ -163,6 +163,7 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
                     wt = 0
                 lattice.addEdge(src, dest, wt)
                 w += 1
+                src = dest
             if w >= scores.shape[1] - 1:
                 lattice.addNode('end')
                 dest = lattice.nodes['end']
@@ -172,7 +173,6 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
                 lattice.addEdge(src, dest, wt)
                 break
             t += 1
-            src = dest
 
     #print('')
     #print(lattice)
