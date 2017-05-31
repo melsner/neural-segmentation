@@ -280,6 +280,16 @@ if __name__ == "__main__":
             if GOLDPHN:
                 gold['phn'] = readGoldFrameSeg(GOLDPHN)
             checkpoint['gold'] = gold
+        if GOLDWRD:
+            goldWrdSegCts = 0
+            for doc in gold['wrd']:
+                goldWrdSegCts += len(gold['wrd'][doc])
+            print('Gold word segmentation count: %d' %goldWrdSegCts)
+        if GOLDPHN:
+            goldPhnSegCts = 0
+            for doc in gold['phn']:
+                goldPhnSegCts += len(gold['phn'][doc])
+            print('Gold phone segmentation count: %d' % goldPhnSegCts)
         if 'raw' in checkpoint:
             raw = checkpoint['raw']
             FRAME_SIZE = raw[raw.keys()[0]].shape[-1]

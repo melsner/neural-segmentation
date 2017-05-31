@@ -133,11 +133,11 @@ def writeLog(iteration, epochLoss, epochAcc, epochDel, epochOneL, epochSeg, text
                 if text['phn'] and scores['phn'][doc]:
                     _, (bp,br,bf), _, (swp,swr,swf) = scores['phn'][doc]
                     score_row += [bp, br, bf, swp, swr, swf]
-                with open(logdir+doc+'_log.txt', 'ab') as f:
+                with open(logdir+'/'+doc+'_log.txt', 'ab') as f:
                     if print_headers:
                         print("\t".join(headers), file=f)
                     print("\t".join(["%g" % xx for xx in score_row]), file=f)
-        with open(logdir+'log.txt', 'ab') as f:
+        with open(logdir+'/log.txt', 'ab') as f:
             if print_headers:
                 print("\t".join(headers), file=f)
             score_row = [iteration, epochLoss, epochDel, epochOneL, epochSeg]
