@@ -17,26 +17,28 @@ def sampleSegs(pSegs):
         segs[doc] = sampleSeg(pSegs[doc])
     return segs
 
-def lossXUtt(model, Xae, Yae, batch_size, metric="logprob"):
+def scoreXUtt(model, Xae, Yae, batch_size, metric="logprob"):
     preds = model.predict(Xae, batch_size=batch_size)
 
     if metric == "logprob":
         logP = np.log(preds)
-        loss = logP * Yae
+        score = logP * Yae
+        ## Zero-out scores for padding chars
+        score *= Xae.any(-1, keepdims=True)
         ## Sum out char, len(chars)
-        loss *= Xae.any(-1, keepdims=True)
-        loss = loss.sum(axis=(2, 3))
+        score = score.sum(axis=(2, 3))
     elif metric == 'mse':
         se = (preds - Yae) ** 2
-        ## Sum out char, len(chars)
+        ## Zero-out scores for padding chars
         se *= Xae.any(-1, keepdims=True)
-        loss = -np.mean(se, axis=(2, 3))
+        ## Sum out char, len(chars)
+        score = -np.mean(se, axis=(2, 3))
     else:
         raise ValueError('''The loss metric you have requested ("%s") is not supported.
                             Supported metrics are "logprob" and "mse".''')
 
     ## Zero out losses from padding regions
-    return loss
+    return score
 
 class Node(object):
     def __init__(self, t=None):

@@ -702,7 +702,7 @@ if __name__ == "__main__":
         #exit()
 
         t1 = time.time()
-        print('Auto-encoder input preprocessing completed in %.4fs.' %(t1-t0))
+        print('Auto-encoder input preprocessing completed in %.2fs.' %(t1-t0))
 
         Yae = getYae(Xae, REVERSE_UTT, ACOUSTIC)
 
@@ -812,15 +812,26 @@ if __name__ == "__main__":
             if ACOUSTIC:
                 vad_batch = vad[b:b+SAMPLING_BATCH_SIZE]
 
-            if iteration < trainNoSegIters or not SEG_NET:
+            if iteration < trainNoSegIters:
                 pSegs_batch = pSegs[b:b+SAMPLING_BATCH_SIZE]
             else:
-                pSegs_batch = segmenter.predict(Xs_batch, batch_size = BATCH_SIZE)
-                pSegs_batch = .9 * pSegs_batch + .1 * .5 * np.ones(pSegs_batch.shape)
+                if SEG_NET:
+                    preds = segmenter.predict(Xs_batch, batch_size = BATCH_SIZE)
+                    ## Interpolate with sampled distribution at 5:5
+                    # pSegs_batch = .5 * preds + .5 * pSegs[b:b + SAMPLING_BATCH_SIZE]
+                    ## Interpolate with uniform distribution at 9:1
+                    pSegs_batch = .9 * preds + .1 * .5 * np.ones(pSegs_batch.shape)
+                else:
+                    pSegs_batch = pSegs[b:b + SAMPLING_BATCH_SIZE]
+                    ## Interpolate with uniform distribution at 9:1
+                    pSegs_batch = .9 * pSegs_batch + .1 * .5 * np.ones(pSegs_batch.shape)
+
+                ## Force segmentations where needed
                 if ACOUSTIC:
                     pSegs_batch[np.where(vad_batch)] = 1.
                 else:
                     pSegs_batch[:,0] = 1.
+
                 ## Zero-out segmentation probability in padding regions
                 pSegs_batch[np.where(Xs_mask_batch)] = 0.
 
@@ -844,7 +855,7 @@ if __name__ == "__main__":
 
                 Yae_batch = getYae(Xae_batch, REVERSE_UTT, ACOUSTIC)
 
-                scores_batch[:,s,:] = lossXUtt(model, Xae_batch, Yae_batch, BATCH_SIZE, metric = METRIC)
+                scores_batch[:,s,:] = scoreXUtt(model, Xae_batch, Yae_batch, BATCH_SIZE, metric = METRIC)
                 if ALGORITHM != 'viterbi':
                     scores_batch[:,s,:] -= deletedChars_batch * DEL_WT
                     scores_batch[:,s,:] -= (oneLetter_batch / maxUtt)[:, None] * ONE_LETTER_WT
@@ -890,6 +901,7 @@ if __name__ == "__main__":
                 pSegs[b:b + SAMPLING_BATCH_SIZE] = segProbs_batch
 
             epochLoss += h.history['loss'][0]
+            exit()
             epochDel += int(deletedChars_batch.sum())
             epochOneL += int(oneLetter_batch.sum())
             epochSeg += int(segsProposal_batch.sum())
@@ -957,8 +969,8 @@ if __name__ == "__main__":
                 segScores['phn']['##overall##'][3] = precision_recall_f(*segScores['phn']['##overall##'][2])
                 print('Phone segmentation scores:')
                 printSegScores(segScore['phn'], ACOUSTIC)
-            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_file=logdir, TextGrid=False)
-            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_file=logdir, TextGrid=True)
+            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_dir=logdir, TextGrid=False)
+            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_dir=logdir, TextGrid=True)
         else:
             printSegScores(getSegScores(gold, segsProposalXDoc, ACOUSTIC), ACOUSTIC)
             writeSolutions(logdir, segsProposalXDoc[doc_list[0]], gold[doc_list[0]], iteration)
