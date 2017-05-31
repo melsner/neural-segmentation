@@ -830,9 +830,9 @@ if __name__ == "__main__":
                 if SEG_NET:
                     preds = segmenter.predict(Xs_batch, batch_size = BATCH_SIZE)
                     ## Interpolate with sampled distribution at 5:5
-                    # pSegs_batch = .5 * preds + .5 * pSegs[b:b + SAMPLING_BATCH_SIZE]
+                    #pSegs_batch = .5 * preds + .5 * pSegs[b:b + SAMPLING_BATCH_SIZE]
                     ## Interpolate with uniform distribution at 9:1
-                    pSegs_batch = .9 * preds + .1 * .5 * np.ones(pSegs_batch.shape)
+                    pSegs_batch = .9 * preds + .1 * .5 * np.ones(preds.shape)
                 else:
                     pSegs_batch = pSegs[b:b + SAMPLING_BATCH_SIZE]
                     ## Interpolate with uniform distribution at 9:1
