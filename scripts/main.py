@@ -219,7 +219,7 @@ if __name__ == "__main__":
     ONE_LETTER_WT = checkpoint.get('oneLetterWt', float(args.oneLetterWt) if args.oneLetterWt else 50 if ACOUSTIC else 10)
     SEG_WT = checkpoint.get('segWt', float(args.segWt) if args.segWt else 1 if ACOUSTIC else 1)
     N_SAMPLES = checkpoint.get('nSamples', int(args.nSamples) if args.nSamples else 50 if ACOUSTIC else 50)
-    BATCH_SIZE = checkpoint.get('batchSize', int(args.batchSize) if args.batchSize else 16 if ACOUSTIC else 128)
+    BATCH_SIZE = checkpoint.get('batchSize', int(args.batchSize) if args.batchSize else 128 if ACOUSTIC else 128)
     SAMPLING_BATCH_SIZE = checkpoint.get('samplingBatchSize', int(args.samplingBatchSize) if args.samplingBatchSize else 128 if ACOUSTIC else 128)
     iteration = checkpoint.get('iteration', 0)
     pretrain = checkpoint.get('pretrain', True)
@@ -666,11 +666,14 @@ if __name__ == "__main__":
 
         t0 = time.time()
         segs = sampleSeg(pSegs)
+        ts0 = time.time()
         Xae, deletedChars, oneLetter = XsSeg2Xae(Xs,
-                                                  Xs_mask,
-                                                  segs,
-                                                  maxUtt,
-                                                  maxLen)
+                                                 Xs_mask,
+                                                 segs,
+                                                 maxUtt,
+                                                 maxLen)
+        ts1 = time.time()
+        print('Split time: %.2f' %(ts1-ts0))
 
         ## Randomly permute samples
         p, p_inv = getRandomPermutation(len(Xae))

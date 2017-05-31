@@ -31,7 +31,7 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, check_output=False):
             utt.pop(0)
         n_words = min(len(utt), maxUtt)
         padwords = maxUtt - n_words
-        for j in xrange(n_words):
+        for j in range(n_words):
             w_len = min(len(utt[j]), maxLen)
             w_target = np.zeros((maxLen, FRAME_SIZE))
             deletedChars[i,j] += max(0, len(utt[j]) - maxLen)
@@ -40,7 +40,7 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, check_output=False):
             utt[j] = w_target
             utt_target[padwords + j] = utt[j]
         extraWDel = 0
-        for j in xrange(maxUtt, len(utt)):
+        for j in range(maxUtt, len(utt)):
             extraWDel += len(utt[j])
         ## Uniformly distribute clipping penaresh2lty for excess words
         deletedChars[i,:] += float(extraWDel) / maxUtt
@@ -51,14 +51,14 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, check_output=False):
     ## to make clipping very unlikely.
     ## Currently only works in acoustic mode.
     if check_output:
-        for i in xrange(len(Xs)):
+        for i in range(len(Xs)):
             src = Xs[i][np.logical_not(Xs_mask[i])]
             target = Xae[i]
             reconstituted = np.zeros((0,FRAME_SIZE))
-            for wi in xrange(maxUtt):
+            for wi in range(maxUtt):
                 w = target[wi][np.where(target[wi].any(-1))]
                 reconstituted = np.concatenate([reconstituted, w])
-            for j in xrange(len(src)):
+            for j in range(len(src)):
                 assert np.allclose(src[j], reconstituted[j]), \
                        '''Reconstitution of MFCC frames failed at timestep %d.
                        Source region: %s\n Reconstituted region: %s''' \
