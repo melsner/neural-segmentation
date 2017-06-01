@@ -24,15 +24,18 @@ def scoreXUtt(model, Xae, Yae, batch_size, metric="logprob"):
         logP = np.log(preds)
         score = logP * Yae
         ## Zero-out scores for padding chars
-        score *= Xae.any(-1, keepdims=True)
+        score *= (np.expand_dims(Xae.argmax(-1), -1) > 0).any(-1, keepdims=True)
         ## Sum out char, len(chars)
         score = score.sum(axis=(2, 3))
     elif metric == 'mse':
-        se = (preds - Yae) ** 2
+        ## Initialize score as negative squared error
+        score = -((preds - Yae) ** 2)
         ## Zero-out scores for padding chars
-        se *= Xae.any(-1, keepdims=True)
-        ## Sum out char, len(chars)
-        score = -np.mean(se, axis=(2, 3))
+        score *= Xae.any(-1, keepdims=True)
+        ## Get MSE per character
+        score = score.mean(-1)
+        ## Sum MSE's within each word
+        score = score.sum(-1)
     else:
         raise ValueError('''The loss metric you have requested ("%s") is not supported.
                             Supported metrics are "logprob" and "mse".''')
@@ -158,7 +161,7 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
                 if w >= 0:
                     wt = scores[s, w]
                     wLen = min(t,uttLen)-max(0,src.t)
-                    wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt) * wLen
+                    wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt)
                 else:
                     wt = 0
                 lattice.addEdge(src, dest, wt)
@@ -169,7 +172,7 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
                 dest = lattice.nodes['end']
                 wt = scores[s, w]
                 wLen = min(t, uttLen) - max(0, src.t)
-                wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt) * wLen
+                wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt)
                 lattice.addEdge(src, dest, wt)
                 break
             t += 1
