@@ -853,6 +853,7 @@ if __name__ == "__main__":
 
             st0 = time.time()
             scores_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxUtt))
+            penalties_batch = np.zeros_like(scores_batch)
             segSamples_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxChar))
             print()
             print('Batch %d/%d' %((b+1)/SAMPLING_BATCH_SIZE+1, N_BATCHES))
@@ -872,14 +873,14 @@ if __name__ == "__main__":
                 Yae_batch = getYae(Xae_batch, REVERSE_UTT, ACOUSTIC)
 
                 scores_batch[:,s,:] = scoreXUtt(model, Xae_batch, Yae_batch, BATCH_SIZE, REVERSE_UTT, metric = METRIC)
-                if ALGORITHM != 'viterbi':
-                    scores_batch[:,s,:] -= deletedChars_batch * DEL_WT
-                    scores_batch[:,s,:] -= (oneLetter_batch / maxUtt)[:, None] * ONE_LETTER_WT
-                    scores_batch[:,s,:] -= (np.squeeze(segs_batch, -1).sum(-1, keepdims=True) / maxUtt) * SEG_WT
+                penalties_batch[:,s,:] -= deletedChars_batch * DEL_WT
+                penalties_batch[:,s,:] -= (oneLetter_batch / maxUtt)[:, None] * ONE_LETTER_WT
+                penalties_batch[:,s,:] -= (np.squeeze(segs_batch, -1).sum(-1, keepdims=True) / maxUtt) * SEG_WT
 
             print('')
             print('Computing segmentation targets from samples')
             segProbs_batch, segsProposal_batch = guessSegTargets(scores_batch,
+                                                                 penalties_batch,
                                                                  segSamples_batch,
                                                                  pSegs_batch,
                                                                  Xs_mask_batch,

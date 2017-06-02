@@ -158,7 +158,6 @@ def getViterbiWordScore(score, wLen, maxLen, delWt, oneLetterWt, segWt):
 
 def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
     uttLen = segs.shape[1] - Xs_mask.sum()
-    #print(uttLen)
 
     ## Construct lattice
     lattice = Lattice()
@@ -218,85 +217,78 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
     #print(finalscore)
     #raw_input('Press any key to continue')
 
-    return np.expand_dims(segsOut, -1), finalscore
+    return segsOut, finalscore
 
-def guessSegTargets(scores, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen=inf, delWt=0, oneLetterWt=0, segWt=0, verbose=True):
-    if algorithm in ['importance', '1best']:
-        scores = scores.sum(-1)
-        MM = np.max(scores, axis=1, keepdims=True)
-        eScores = np.exp(scores - MM + 1e-5)
-        # approximately the probability of the sample given the data
-        samplePrior = eScores / eScores.sum(axis=1, keepdims=True)
-        bestSampleXUtt = np.argmax(samplePrior, axis=1)
-        bestSegXUtt = []
-        bestSampleScore = 0
-        bestSamplePrior = 0
-        for ix in xrange(len(bestSampleXUtt)):
-            bestSegXUtt.append(segs[ix][bestSampleXUtt[ix], :])
-            bestSampleScore += scores[ix, bestSampleXUtt[ix]]
-            bestSamplePrior += samplePrior[ix, bestSampleXUtt[ix]]
-        bestSamplePrior /= len(bestSampleXUtt)
-        bestSegXUtt = np.array(bestSegXUtt)
-        if verbose:
-            print('Best segmentation set: score = %s, prob = %s, num segs = %s' % (
-            bestSampleScore, bestSamplePrior, bestSegXUtt.sum()))
+def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen=inf, delWt=0, oneLetterWt=0, segWt=0, verbose=True):
+    augscores = scores + penalties
+    eScores = augscores.sum(-1)
+    MM = np.max(eScores, axis=1, keepdims=True)
+    eScores = np.exp(eScores - MM + 1e-5)
+    # approximately the probability of the sample given the data
+    samplePrior = eScores / eScores.sum(axis=1, keepdims=True)
+    bestSampleXUtt = np.argmax(samplePrior, axis=1)
+    bestSegXUtt = np.zeros_like(segs[:,0,...])
+    bestSampleScore = 0
+    bestSamplePrior = 0
+    for ix in xrange(len(bestSampleXUtt)):
+        bestSegXUtt[ix] = segs[ix][bestSampleXUtt[ix]]
+        bestSampleScore += augscores[ix, bestSampleXUtt[ix]].sum()
+        bestSamplePrior += samplePrior[ix, bestSampleXUtt[ix]]
+    bestSamplePrior /= len(bestSampleXUtt)
+    bestSegXUtt = np.array(bestSegXUtt)
+    if verbose:
+        print('Best segmentation set: score = %s, prob = %s, num segs = %s' % (
+        bestSampleScore, bestSamplePrior, bestSegXUtt.sum()))
 
-        if algorithm == '1best':
-            return bestSegXUtt, bestSegXUtt ## Seg targets (1st output) and best segmentation (2nd output) are identical.
+    ## Proposal prob
+    priorSeg = np.expand_dims(np.squeeze(priorSeg, -1), 1)
+    qSeg = segs * priorSeg + (1 - segs) * (1 - priorSeg)
 
-        ## Proposal prob
-        priorSeg = np.expand_dims(np.squeeze(priorSeg, -1), 1)
-        qSeg = segs * priorSeg + (1 - segs) * (1 - priorSeg)
+    wts = np.expand_dims(samplePrior, -1) / qSeg
+    wts = wts / wts.sum(axis=1, keepdims=True)
 
-        wts = np.expand_dims(samplePrior, -1) / qSeg
-        wts = wts / wts.sum(axis=1, keepdims=True)
+    # print("score distr:", dist[:10])
 
-        # print("score distr:", dist[:10])
+    # print("shape of segment matrix", segmat.shape)
+    # print("best score sample", np.argmax(-scores))
+    # print("transformed losses for utt 0", eScores[:, 0])
+    # print("best score sample", np.argmax(eScores))
+    # best_score = np.argmax(eScores)
 
-        # print("shape of segment matrix", segmat.shape)
-        # print("best score sample", np.argmax(-scores))
-        # print("transformed losses for utt 0", eScores[:, 0])
-        # print("best score sample", np.argmax(eScores))
-        # best_score = np.argmax(eScores)
+    # print("top row of distr", pSeg[:, 0])
+    # print("top row of correction", qSeg[:, 0])
+    # print("top row of weights", wts[:, 0])
 
-        # print("top row of distr", pSeg[:, 0])
-        # print("top row of correction", qSeg[:, 0])
-        # print("top row of weights", wts[:, 0])
+    # sample x utterance x segment
+    # nSamples = segmat.shape[1]
+    wtSegs = segs * wts
 
-        # sample x utterance x segment
-        # nSamples = segmat.shape[1]
-        wtSegs = segs * wts
+    # for si in range(nSamples):
+    #    print("seg vector", si, segmat[si, 0, :])
+    #    print("est posterior", pSeg[si, 0])
+    #    print("q", qSeg[si, 0])
+    #    print("weight", wts[si, 0])
+    #    print("contrib", wtSegs[si, 0])
 
-        # for si in range(nSamples):
-        #    print("seg vector", si, segmat[si, 0, :])
-        #    print("est posterior", pSeg[si, 0])
-        #    print("q", qSeg[si, 0])
-        #    print("weight", wts[si, 0])
-        #    print("contrib", wtSegs[si, 0])
+    segTargetsXUtt = np.expand_dims(wtSegs.sum(axis=1), -1)
 
-        segTargetsXUtt = np.expand_dims(wtSegs.sum(axis=1), -1)
-        bestSampleXUtt = segTargetsXUtt > .5
-
-        # print("        Difference between best sample and guessed best", np.sum(segs[best_score]-best))
-        # print("        Total segmentations (best sample)", np.sum(segs[best_score]))
-        # print("        Total segmentations (best guess)", np.sum(best))
-
-        # print("top row of wt segs", segWts[0])
-        # print("max segs", best[0])
+    if algorithm == '1best':
+        ## Nothing changes, used best sample's segmentations
+        pass
+    elif algorithm == 'importance':
+        bestSegXUtt = segTargetsXUtt > .5
     elif algorithm == 'viterbi':
-        bestSampleXUtt = np.zeros_like(priorSeg)
         batch_score = 0
         for i in range(len(scores)):
-            bestSampleXUtt[i], utt_score = viterbiDecode(segs[i],
-                                                         scores[i],
-                                                         Xs_mask[i],
-                                                         maxLen,
-                                                         delWt,
-                                                         oneLetterWt,
-                                                         segWt)
+            bestSegXUtt[i], utt_score = viterbiDecode(segs[i],
+                                                      scores[i],
+                                                      Xs_mask[i],
+                                                      maxLen,
+                                                      delWt,
+                                                      oneLetterWt,
+                                                      segWt)
             batch_score += utt_score
-        print('Best segmentation set: score = %s, num segs = %s' %(batch_score, bestSampleXUtt.sum()))
-        segTargetsXUtt = bestSampleXUtt
+        print('Best Viterbi-decoded segmentation set: score = %s, num segs = %s' %(batch_score, bestSegXUtt.sum()))
     else:
         raise ValueError('''The sampling algorithm you have requested ("%s") is not supported.'
                             Please use one of the following:
@@ -304,7 +296,7 @@ def guessSegTargets(scores, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen
                             importance
                             1best
                             viterbi''')
-    return segTargetsXUtt, bestSampleXUtt
+    return segTargetsXUtt, bestSegXUtt
 
 
 def KL(pSeg1, pSeg2):
