@@ -854,6 +854,8 @@ if __name__ == "__main__":
             st0 = time.time()
             scores_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxUtt))
             segSamples_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxChar))
+            Xae_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxUtt, maxLen, charDim))
+            Yae_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxUtt, maxLen, charDim))
             print()
             print('Batch %d/%d' %((b+1)/SAMPLING_BATCH_SIZE+1, N_BATCHES))
             for s in range(N_SAMPLES):
@@ -862,20 +864,21 @@ if __name__ == "__main__":
                 segs_batch = sampleSeg(pSegs_batch)
                 segSamples_batch[:,s,:] = np.squeeze(segs_batch, -1)
 
-                Xae_batch, deletedChars_batch, oneLetter_batch = XsSeg2Xae(Xs_batch,
+                Xae_batch[:,s,...], deletedChars_batch, oneLetter_batch = XsSeg2Xae(Xs_batch,
                                                                            Xs_mask_batch,
                                                                            segs_batch,
                                                                            maxUtt,
                                                                            maxLen,
                                                                            ACOUSTIC)
 
-                Yae_batch = getYae(Xae_batch, REVERSE_UTT, ACOUSTIC)
+                Yae_batch[:,s,...] = getYae(Xae_batch[:,s,...], REVERSE_UTT, ACOUSTIC)
 
-                scores_batch[:,s,:] = scoreXUtt(model, Xae_batch, Yae_batch, BATCH_SIZE, REVERSE_UTT, metric = METRIC)
                 if ALGORITHM != 'viterbi':
                     scores_batch[:,s,:] -= deletedChars_batch * DEL_WT
                     scores_batch[:,s,:] -= (oneLetter_batch / maxUtt)[:, None] * ONE_LETTER_WT
                     scores_batch[:,s,:] -= (np.squeeze(segs_batch, -1).sum(-1, keepdims=True) / maxUtt) * SEG_WT
+
+            scores_batch += scoreXUtt(model, Xae_batch, Yae_batch, BATCH_SIZE, REVERSE_UTT, metric = METRIC)
 
             print('')
             print('Computing segmentation targets from samples')
