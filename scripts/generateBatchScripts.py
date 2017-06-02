@@ -5,6 +5,8 @@ clistr = ' '.join(sys.argv[2:])
 argchunks = clistr.split('--')
 if argchunks[0] =='':
     argchunks = argchunks[1:]
+for i in range(len(argchunks)):
+    argchunks[i] = argchunks[i].strip()
 
 args = []
 
@@ -30,7 +32,6 @@ def printCallList(args, prefix, logname):
             printCallList(args[1:], prefix + ' ' + v, logname + xtralogname)
 
 for c in argchunks:
-    c = c.strip()
     clist = c.split()
     if len(clist) > 1 and clist[1] == '?':
         args.append(['','--' + clist[0]])
@@ -39,7 +40,7 @@ for c in argchunks:
     if len(clist) > 1 and clist[1] != '?':
         args.append(clist[1:])
 
-if '--acoustic' in argchunks:
+if 'acoustic' in argchunks:
     logname = 'acoustic'
 else:
     logname = 'text'
