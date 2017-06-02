@@ -19,8 +19,7 @@ def sampleSegs(pSegs):
     return segs
 
 def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=False):
-    preds = model.predict(np.concatenate(Xae, 0), batch_size=batch_size)
-    preds = np.stack(np.split(preds, Xae.shape[0]))
+    preds = model.predict(Xae, batch_size=batch_size)
 
     if metric == "logprob":
         score = np.log(preds)
@@ -30,7 +29,7 @@ def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=F
         ## Zero-out scores for padding chars
         score = score * (np.expand_dims(Yae.argmax(-1), -1) > 0).any(-1, keepdims=True)
         ## Sum out char, len(chars)
-        score = score.sum(axis=(-2, -1))
+        score = score.sum(axis=(2, 3))
         # if debug:
         #     for u in range(len(score1)):
         #         for w in range(len(score1[u])):
@@ -41,7 +40,7 @@ def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=F
         #             print(score4[u,w])
         #             raw_input('Press any key to continue')
         if reverseUtt:
-            score = np.flip(score, 2)
+            score = np.flip(score, 1)
     elif metric == 'mse':
         ## Initialize score as negative squared error
         score = -((preds - Yae) ** 2)
@@ -52,14 +51,12 @@ def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=F
         ## Sum MSE's within each word
         score = score.sum(-1)
         if reverseUtt:
-            score = np.flip(score, 2)
+            score = np.flip(score, 1)
     else:
         raise ValueError('''The loss metric you have requested ("%s") is not supported.
                             Supported metrics are "logprob" and "mse".''')
 
     ## Zero out losses from padding regions
-    #print(score)
-    #raw_input()
     return score
 
 class Node(object):
@@ -214,7 +211,6 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
 
     ## Shortest path
     segsOut = np.zeros((segs.shape[1]))
-    #print(uttLen)
     segseq, finalscore = lattice.dijkstra()
     segsOut[segseq] = 1
     #print(segsOut)
