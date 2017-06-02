@@ -48,14 +48,16 @@ def mask_output(x, input, mask_value, reverseUtt):
 
 
 def masked_categorical_crossentropy(y_true, y_pred):
-    mask_base = K.any(y_true, axis=-1, keepdims=True)
-    mask = K.cast(mask_base, 'float32')
+    mask = K.cast(K.expand_dims(K.greater(K.argmax(y_true), 0), axis=-1), 'float32')
     y_pred *= mask
     y_true *= mask
     y_pred += 1-mask
     y_pred += 1-mask
     losses = K.categorical_crossentropy(y_pred, y_true)
-    losses *= K.squeeze(mask, -1) # / K.mean(mask)
+    losses *= K.squeeze(mask, -1)
+    ## Normalize by number of real segments, using a small non-zero denominator in cases of padding characters
+    ## in order to avoid division by zero
+    losses /= (K.mean(mask) + (1e-10*(1-K.mean(mask))))
     return losses
 
 def masked_mean_squared_error(y_true, y_pred):
@@ -63,11 +65,13 @@ def masked_mean_squared_error(y_true, y_pred):
     return K.mean(K.square(y_pred - y_true), axis=-1)
 
 def masked_categorical_accuracy(y_true, y_pred):
-    mask = K.cast(K.any(y_true, axis=-1, keepdims=True), 'float32')
-    accuracy = K.cast(K.equal(K.argmax(y_true, axis=-1),
-                          K.argmax(y_pred, axis=-1)),
-                  K.floatx())
-    return accuracy * K.squeeze(mask, -1) # / K.mean(mask)
+    mask = K.cast(K.expand_dims(K.greater(K.argmax(y_true), 0), axis=-1), 'float32')
+    accuracy = K.cast(K.equal(K.argmax(y_true, axis=-1), K.argmax(y_pred, axis=-1)), 'float32')
+    accuracy *= K.squeeze(mask, -1)
+    ## Normalize by number of real segments, using a small non-zero denominator in cases of padding characters
+    ## in order to avoid division by zero
+    accuracy /= (K.mean(mask) + (1e-10*(1-K.mean(mask))))
+    return accuracy
 
 def trainAEOnly(ae, Xs, Xs_mask, segs, trainIters, batch_size, logdir, reverseUtt, acoustic):
     print('Training auto-encoder network')
@@ -204,11 +208,11 @@ if __name__ == "__main__":
     ALGORITHM = checkpoint.get('algorithm', args.algorithm)
     REVERSE_UTT = checkpoint.get('reverseUtt', args.reverseUtt)
     MASK_VALUE = 0 if ACOUSTIC else 1
-    wordHidden = checkpoint.get('wordHidden', int(args.wordHidden) if args.wordHidden else 100 if ACOUSTIC else 40)
+    wordHidden = checkpoint.get('wordHidden', int(args.wordHidden) if args.wordHidden else 100 if ACOUSTIC else 80)
     uttHidden = checkpoint.get('uttHidden', int(args.uttHidden) if args.uttHidden else 500 if ACOUSTIC else 400)
     segHidden = checkpoint.get('segHidden', int(args.segHidden) if args.segHidden else 500 if ACOUSTIC else 100)
     wordDropout = checkpoint.get('wordDropout', float(args.wordDropout) if args.wordDropout else 0.25 if ACOUSTIC else 0.25)
-    charDropout = checkpoint.get('charDropout', float(args.charDropout) if args.charDropout else 0.25 if ACOUSTIC else 0.25)
+    charDropout = checkpoint.get('charDropout', float(args.charDropout) if args.charDropout else 0.25 if ACOUSTIC else 0.5)
     maxChar = checkpoint.get('maxChar', int(args.maxChar) if args.maxChar else 500 if ACOUSTIC else 30)
     maxUtt = checkpoint.get('maxUtt', int(args.maxUtt) if args.maxUtt else 50 if ACOUSTIC else 10)
     maxLen = checkpoint.get('maxLen', int(args.maxLen) if args.maxLen else 100 if ACOUSTIC else 7)
@@ -494,9 +498,9 @@ if __name__ == "__main__":
         model.compile(loss="mean_squared_error",
                       optimizer='adam')
     else:
-        model.compile(loss="categorical_crossentropy",
+        model.compile(loss=masked_categorical_crossentropy,
                       optimizer='adam',
-                      metrics=["accuracy"])
+                      metrics=[masked_categorical_accuracy])
     model.summary()
 
     ## 2. Segmenter
@@ -540,7 +544,7 @@ if __name__ == "__main__":
             #scores = getSegScores(gold, Y, acoustic=ACOUSTIC)
             #printSegScores(scores, acoustic=ACOUSTIC)
 
-        if args.supervisedAE and False:
+        if args.supervisedAE:
             Xae = trainAEOnly(model,
                               Xs,
                               Xs_mask,
@@ -867,7 +871,7 @@ if __name__ == "__main__":
 
                 Yae_batch = getYae(Xae_batch, REVERSE_UTT, ACOUSTIC)
 
-                scores_batch[:,s,:] = scoreXUtt(model, Xae_batch, Yae_batch, BATCH_SIZE, metric = METRIC)
+                scores_batch[:,s,:] = scoreXUtt(model, Xae_batch, Yae_batch, BATCH_SIZE, REVERSE_UTT, metric = METRIC)
                 if ALGORITHM != 'viterbi':
                     scores_batch[:,s,:] -= deletedChars_batch * DEL_WT
                     scores_batch[:,s,:] -= (oneLetter_batch / maxUtt)[:, None] * ONE_LETTER_WT
@@ -914,7 +918,7 @@ if __name__ == "__main__":
 
             epochLoss += h.history['loss'][0]
             if not ACOUSTIC:
-                epochAcc += h.history['acc'][0]
+                epochAcc += h.history['masked_categorical_accuracy'][0]
             epochDel += int(deletedChars_batch.sum())
             epochOneL += int(oneLetter_batch.sum())
             epochSeg += int(segsProposal_batch.sum())
@@ -962,6 +966,16 @@ if __name__ == "__main__":
         print('Deletions:', epochDel)
         print('One letter words:', epochOneL)
         print('Total segmentation points:', epochSeg)
+
+        if not ACOUSTIC:
+            n = 10
+            Xae, _, _ = XsSeg2Xae(Xs[:n],
+                                  Xs_mask[:n],
+                                  segsProposal[:n],
+                                  maxUtt,
+                                  maxLen,
+                                  ACOUSTIC)
+            printReconstruction(10, model, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
 
         segsProposalXDoc = dict.fromkeys(doc_list)
         for doc in segsProposalXDoc:

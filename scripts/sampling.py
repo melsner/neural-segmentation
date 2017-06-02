@@ -1,5 +1,6 @@
 import sys, numpy as np
 from numpy import ma, inf, nan
+from data_handling import getYae
 
 def getRandomPermutation(n):
     p = np.random.permutation(np.arange(n))
@@ -17,25 +18,40 @@ def sampleSegs(pSegs):
         segs[doc] = sampleSeg(pSegs[doc])
     return segs
 
-def scoreXUtt(model, Xae, Yae, batch_size, metric="logprob"):
+def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=False):
     preds = model.predict(Xae, batch_size=batch_size)
 
     if metric == "logprob":
-        logP = np.log(preds)
-        score = logP * Yae
+        score = np.log(preds)
+        score = score * Yae
+        #print(Yae.argmax(-1))
+        #print(score)
         ## Zero-out scores for padding chars
-        score *= (np.expand_dims(Xae.argmax(-1), -1) > 0).any(-1, keepdims=True)
+        score = score * (np.expand_dims(Yae.argmax(-1), -1) > 0).any(-1, keepdims=True)
         ## Sum out char, len(chars)
         score = score.sum(axis=(2, 3))
+        # if debug:
+        #     for u in range(len(score1)):
+        #         for w in range(len(score1[u])):
+        #             print(score1[u, w])
+        #             print(score2[u, w])
+        #             print(score3[u, w])
+        #             print((np.expand_dims(Yae[u, w].argmax(-1), -1) > 0).sum())
+        #             print(score4[u,w])
+        #             raw_input('Press any key to continue')
+        if reverseUtt:
+            score = np.flip(score, 1)
     elif metric == 'mse':
         ## Initialize score as negative squared error
         score = -((preds - Yae) ** 2)
         ## Zero-out scores for padding chars
-        score *= Xae.any(-1, keepdims=True)
+        score *= Yae.any(-1, keepdims=True)
         ## Get MSE per character
         score = score.mean(-1)
         ## Sum MSE's within each word
         score = score.sum(-1)
+        if reverseUtt:
+            score = np.flip(score, 1)
     else:
         raise ValueError('''The loss metric you have requested ("%s") is not supported.
                             Supported metrics are "logprob" and "mse".''')
@@ -51,7 +67,7 @@ class Node(object):
         self.prev = None
 
     def __str__(self):
-        return str(self.t)
+        return str(self.t) + ' (prev: ' + str(self.prev.t if self.prev else self.prev) + ', score: ' + str(self.score) + ')'
 
 class Edge(object):
     def __init__(self, a, b, wt):
@@ -60,7 +76,7 @@ class Edge(object):
         self.wt = wt
 
     def __str__(self):
-        return str(self.a) + '->' + str(self.b) + ' (' + str(self.wt) + ')'
+        return str(self.a.t) + '->' + str(self.b.t) + ' (' + str(self.wt) + ')'
 
 class Lattice(object):
     def __init__(self):
@@ -123,11 +139,15 @@ class Lattice(object):
                     v.score = score
                     v.prev = u
         segseq = []
+        #print(self)
         finalscore = u.score
+        #print(finalscore)
         while u.prev != None:
             u = u.prev
             if u.t != 'start':
                 segseq.insert(0, u.t)
+        #print(segseq)
+        #raw_input()
         return segseq, finalscore
 
 def getViterbiWordScore(score, wLen, maxLen, delWt, oneLetterWt, segWt):
@@ -138,6 +158,7 @@ def getViterbiWordScore(score, wLen, maxLen, delWt, oneLetterWt, segWt):
 
 def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
     uttLen = segs.shape[1] - Xs_mask.sum()
+    #print(uttLen)
 
     ## Construct lattice
     lattice = Lattice()
@@ -145,14 +166,23 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
     lattice.addNode('end')
 
     for s in range(segs.shape[0]):
+        #print(np.where(segs[s]))
+        #print(scores[s])
         src = lattice.nodes['start']
-        w = -1
+        src_t = -inf
+        ## Set score index to -1, shift rightward if no boundary at first timestep
+        w = -1 + int(not segs[s][0] == 1)
+        ## Scan to get the index of the first real word score
+        while w < scores.shape[1]-1 and scores[s,w+1] == 0.:
+            w += 1
+        #print(w)
         t = 0
         while t <= segs.shape[1]:
-            if t < segs.shape[1]:
+            if t < segs.shape[1] and w < scores.shape[1]-1:
                 seg = segs[s,t]
                 label = t
             else:
+                t = uttLen
                 seg = 1
                 label = 'end'
             if seg == 1:
@@ -160,21 +190,19 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
                 dest = lattice.nodes[label]
                 if w >= 0:
                     wt = scores[s, w]
-                    wLen = min(t,uttLen)-max(0,src.t)
+                    wLen = min(t,uttLen) - max(0,src_t)
                     wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt)
+                    #print(t, wLen, src_t, wt, scores[s,w])
+                    #raw_input()
                 else:
                     wt = 0
                 lattice.addEdge(src, dest, wt)
                 w += 1
                 src = dest
-            if w >= scores.shape[1] - 1:
-                lattice.addNode('end')
-                dest = lattice.nodes['end']
-                wt = scores[s, w]
-                wLen = min(t, uttLen) - max(0, src.t)
-                wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt)
-                lattice.addEdge(src, dest, wt)
-                break
+                src_t = src.t
+                ## Handle case when we have reached maxUtt
+                if src_t == 'end':
+                    break
             t += 1
 
     #print('')
@@ -256,16 +284,19 @@ def guessSegTargets(scores, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen
         # print("top row of wt segs", segWts[0])
         # print("max segs", best[0])
     elif algorithm == 'viterbi':
-        segTargetsXUtt = np.zeros_like(priorSeg)
+        bestSampleXUtt = np.zeros_like(priorSeg)
+        batch_score = 0
         for i in range(len(scores)):
-            segTargetsXUtt[i], utt_score = viterbiDecode(segs[i],
+            bestSampleXUtt[i], utt_score = viterbiDecode(segs[i],
                                                          scores[i],
                                                          Xs_mask[i],
                                                          maxLen,
                                                          delWt,
                                                          oneLetterWt,
                                                          segWt)
-        bestSampleXUtt = segTargetsXUtt
+            batch_score += utt_score
+        print('Best segmentation set: score = %s, num segs = %s' %(batch_score, bestSampleXUtt.sum()))
+        segTargetsXUtt = bestSampleXUtt
     else:
         raise ValueError('''The sampling algorithm you have requested ("%s") is not supported.'
                             Please use one of the following:
