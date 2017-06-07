@@ -22,7 +22,7 @@ def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=F
     preds = model.predict(Xae, batch_size=batch_size)
 
     if metric == "logprob":
-        score = np.log(preds)
+        score = np.nan_to_num(np.log(preds))
         score = score * Yae
         #print(Yae.argmax(-1))
         #print(score)

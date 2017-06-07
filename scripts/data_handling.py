@@ -62,12 +62,6 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False, check_output=Fa
                        Source region: %s\n Reconstituted region: %s''' \
                        %(j, src[j-1:j+2], reconstituted[j-1:j+2])
 
-
-    if not acoustic:
-        padchar = np.zeros(FRAME_SIZE)
-        padchar[0] = 1
-        Xae[np.where(np.logical_not(Xae.any(-1)))] = padchar
-
     return Xae, deletedChars, oneLetter
 
 def XsSegs2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False):
@@ -87,6 +81,7 @@ def XsSegs2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False):
     return np.concatenate(Xae), np.concatenate(deletedChars), np.concatenate(oneLetter)
 
 def getYae(Xae, reverseUtt, acoustic=False):
+    charDim = Xae.shape[-1]
     if reverseUtt:
         Yae = np.flip(Xae, 1)
     else:

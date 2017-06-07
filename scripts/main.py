@@ -57,7 +57,7 @@ def masked_categorical_crossentropy(y_true, y_pred):
     losses *= K.squeeze(mask, -1)
     ## Normalize by number of real segments, using a small non-zero denominator in cases of padding characters
     ## in order to avoid division by zero
-    losses /= (K.mean(mask) + (1e-10*(1-K.mean(mask))))
+    #losses /= (K.mean(mask) + (1e-10*(1-K.mean(mask))))
     return losses
 
 def masked_mean_squared_error(y_true, y_pred):
@@ -65,12 +65,12 @@ def masked_mean_squared_error(y_true, y_pred):
     return K.mean(K.square(y_pred - y_true), axis=-1)
 
 def masked_categorical_accuracy(y_true, y_pred):
-    mask = K.cast(K.expand_dims(K.greater(K.argmax(y_true), 0), axis=-1), 'float32')
+    mask = K.cast(K.expand_dims(K.greater(K.argmax(y_true, axis=-1), 0), axis=-1), 'float32')
     accuracy = K.cast(K.equal(K.argmax(y_true, axis=-1), K.argmax(y_pred, axis=-1)), 'float32')
     accuracy *= K.squeeze(mask, -1)
     ## Normalize by number of real segments, using a small non-zero denominator in cases of padding characters
     ## in order to avoid division by zero
-    accuracy /= (K.mean(mask) + (1e-10*(1-K.mean(mask))))
+    #accuracy /= (K.mean(mask) + (1e-10*(1-K.mean(mask))))
     return accuracy
 
 def trainAEOnly(ae, Xs, Xs_mask, segs, trainIters, batch_size, logdir, reverseUtt, acoustic):
@@ -91,7 +91,7 @@ def trainAEOnly(ae, Xs, Xs_mask, segs, trainIters, batch_size, logdir, reverseUt
     Yae = getYae(Xae, reverseUtt, acoustic)
 
     ## Re-initialize network weights in case any training has already happened
-    ae.load_weights(logdir + '/model.h5', by_name=True)
+    #ae.load_weights(logdir + '/model.h5', by_name=True)
 
     ae.fit(Xae,
            Yae,
@@ -231,6 +231,7 @@ if __name__ == "__main__":
     DEBUG = args.debug
     wordDecLayers = 1
     RNN = recurrent.LSTM
+    OPTIM = 'rmsprop'
 
     checkpoint['acoustic'] = ACOUSTIC
     checkpoint['segNet'] = SEG_NET
@@ -496,12 +497,14 @@ if __name__ == "__main__":
 
     if ACOUSTIC:
         model.compile(loss="mean_squared_error",
-                      optimizer='adam')
+                      optimizer=OPTIM)
     else:
         model.compile(loss=masked_categorical_crossentropy,
-                      optimizer='adam',
+                      optimizer=OPTIM,
                       metrics=[masked_categorical_accuracy])
     model.summary()
+
+    model.save(logdir + '/model_init.h5')
 
     ## 2. Segmenter
     if SEG_NET:
@@ -511,8 +514,10 @@ if __name__ == "__main__":
         segmenter.add(TimeDistributed(Dense(1)))
         segmenter.add(Activation("sigmoid"))
         segmenter.compile(loss="binary_crossentropy",
-                          optimizer="adam")
+                          optimizer=OPTIM)
         segmenter.summary()
+
+        segmenter.save(logdir + '/segmenter_init.h5')
 
     if load_models and os.path.exists(logdir + '/model.h5'):
         print('Autoencoder checkpoint found. Loading weights...')
@@ -543,20 +548,29 @@ if __name__ == "__main__":
             Y = texts2Segs(gold, maxChar)
             #scores = getSegScores(gold, Y, acoustic=ACOUSTIC)
             #printSegScores(scores, acoustic=ACOUSTIC)
-
         if args.supervisedAE:
-            Xae = trainAEOnly(model,
-                              Xs,
-                              Xs_mask,
-                              Y,
-                              trainIters,
-                              BATCH_SIZE,
-                              logdir,
-                              REVERSE_UTT,
-                              ACOUSTIC)
+            for i in range(trainIters):
+                print('Iteration %d' % (i + 1))
+                Xae = trainAEOnly(model,
+                                  Xs,
+                                  Xs_mask,
+                                  Y,
+                                  1,
+                                  BATCH_SIZE,
+                                  logdir,
+                                  REVERSE_UTT,
+                                  ACOUSTIC)
 
-            if not ACOUSTIC:
-                printReconstruction(10, model, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
+                # preds = model.predict(Xae, batch_size=BATCH_SIZE).argmax(-1)
+                # preds = np.ma.array(preds, mask = np.logical_not(preds > 0))
+                # true = getYae(Xae, REVERSE_UTT).argmax(-1)
+                # true = np.ma.array(true, mask = np.logical_not(true > 0))
+                # acc = (preds == true).sum() / (preds > 0).sum()
+                # print('Accuracy: %s' %acc)
+
+                if not ACOUSTIC:
+                    printReconstruction(10, model, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
+
 
         if args.supervisedSegmenter:
             segsProposal = trainSegmenterOnly(segmenter,
@@ -577,18 +591,20 @@ if __name__ == "__main__":
         print('Using random segmentations')
         Y = sampleSeg(pSegs)
         if args.supervisedAE:
-            Xae = trainAEOnly(model,
-                              Xs,
-                              Xs_mask,
-                              Y,
-                              trainIters,
-                              BATCH_SIZE,
-                              logdir,
-                              REVERSE_UTT,
-                              ACOUSTIC)
+            for i in range(trainIters):
+                print('Iteration %d' %(i+1))
+                Xae = trainAEOnly(model,
+                                  Xs,
+                                  Xs_mask,
+                                  Y,
+                                  1,
+                                  BATCH_SIZE,
+                                  logdir,
+                                  REVERSE_UTT,
+                                  ACOUSTIC)
 
-            if not ACOUSTIC:
-                printReconstruction(10, model, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
+                if not ACOUSTIC:
+                    printReconstruction(10, model, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
 
         if args.supervisedSegmenter:
             segsProposal = trainSegmenterOnly(segmenter,
@@ -733,15 +749,20 @@ if __name__ == "__main__":
                           np.concatenate([segs[d] for d in segs]),
                           batch_size=BATCH_SIZE,
                           epochs=1)
-
-        Xae = Xae[p_inv]
-        Xs = Xs[p_inv]
+        # print(Yae.argmax(-1))
+        # print(Yae.sum(-1))
+        # print(Xae.argmax(-1))
+        # print(Xae.sum(-1))
+        # raw_input()
 
         print('Training auto-encoder network on random segmentation.')
         model.fit(Xae,
                   Yae,
                   batch_size=BATCH_SIZE,
                   epochs=1)
+
+        Xae = Xae[p_inv]
+        Xs = Xs[p_inv]
 
         # Correctness checks for NN masking
         if DEBUG:
@@ -902,14 +923,16 @@ if __name__ == "__main__":
 
             Yae_batch = getYae(Xae_batch, REVERSE_UTT, ACOUSTIC)
 
-            print('Updating auto-encoder network')
+            print('Fitting auto-encoder network')
+            #model.load_weights(logdir + '/model_init.h5', by_name=True)
             h = model.fit(Xae_batch,
                           Yae_batch,
                           batch_size=BATCH_SIZE,
                           epochs=1)
 
             if SEG_NET:
-                print('Updating segmenter network')
+                print('Fitting segmenter network')
+                #segmenter.load_weights(logdir + '/segmenter_init.h5', by_name=True)
                 segmenter.fit(Xs_batch,
                               segProbs_batch,
                               batch_size=BATCH_SIZE,
@@ -917,9 +940,9 @@ if __name__ == "__main__":
             else:
                 pSegs[b:b + SAMPLING_BATCH_SIZE] = segProbs_batch
 
-            epochLoss += h.history['loss'][0]
+            epochLoss += h.history['loss'][-1]
             if not ACOUSTIC:
-                epochAcc += h.history['masked_categorical_accuracy'][0]
+                epochAcc += h.history['masked_categorical_accuracy'][-1]
             epochDel += int(deletedChars_batch.sum())
             epochOneL += int(oneLetter_batch.sum())
             epochSeg += int(segsProposal_batch.sum())
