@@ -9,8 +9,11 @@ DATA := $(THISDIR)/data
 BUILD := $(THISDIR)/build
 
 ZSPEECH-SAMPLE := $(foreach f, $(shell cat $(DATA)/sample_files.txt | paste -sd ' ' -), build/zerospeech/sample/$(f))
+ZSPEECH-SAMPLE-ND := $(foreach f, $(shell cat $(DATA)/sample_files.txt | paste -sd ' ' -), build/zerospeech/sampleNoD/$(f))
 ZSPEECH-ENGLISH := $(foreach f, $(shell cat $(DATA)/english_files.txt | paste -sd ' ' -), build/zerospeech/english/$(f))
+ZSPEECH-ENGLISH-ND := $(foreach f, $(shell cat $(DATA)/english_files.txt | paste -sd ' ' -), build/zerospeech/englishNoD/$(f))
 ZSPEECH-XITSONGA := $(foreach f, $(shell cat $(DATA)/xitsonga_files.txt | paste -sd ' ' -), build/zerospeech/xitsonga/$(f))
+ZSPEECH-XITSONGA-ND := $(foreach f, $(shell cat $(DATA)/xitsonga_files.txt | paste -sd ' ' -), build/zerospeech/xitsongaNoD/$(f))
 
 ################################################################################
 #
@@ -100,6 +103,9 @@ endif
 zerospeech-%: build/zerospeech/%/mfccs data/%_vad.txt data/%.wrd data/%.phn
 	cp $(wordlist 2,100,$^) $(dir $(word 1, $^))
 
+zerospeech-%-NoD: build/zerospeech/%NoD/mfccsNoD data/%_vad.txt data/%.wrd data/%.phn
+	cp $(wordlist 2,100,$^) $(dir $(word 1, $^))
+
 clean:
 	rm -rf build
 
@@ -116,15 +122,31 @@ build/zerospeech/%/rasanen_seg.txt: scripts/rasanen2seginit.py data/rasanen_seg_
 $(ZSPEECH-SAMPLE): $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(dir $$@)
 	find $(word 1, $^) -name "$(notdir $@)" -type f -exec cp '{}' build/zerospeech/sample/ \;
 
+.PRECIOUS: $(ZSPEECH-SAMPLE)
+$(ZSPEECH-SAMPLE-ND): $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(dir $$@)
+	find $(word 1, $^) -name "$(notdir $@)" -type f -exec cp '{}' build/zerospeech/sampleNoD/ \;
+
 .PRECIOUS: $(ZSPEECH-ENGLISH)
 $(ZSPEECH-ENGLISH): $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(dir $$@)
 	find $(word 1, $^) -name "$(notdir $@)" -type f -exec cp '{}' build/zerospeech/english/ \;
+
+.PRECIOUS: $(ZSPEECH-ENGLISH-ND)
+$(ZSPEECH-ENGLISH-ND): $(BUCKEYEDIR) $(CONFIGDIR)/user-buckeye-directory.txt | $$(dir $$@)
+	find $(word 1, $^) -name "$(notdir $@)" -type f -exec cp '{}' build/zerospeech/englishNoD/ \;
 
 .PRECIOUS: $(ZSPEECH-XITSONGA)
 $(ZSPEECH-XITSONGA): $(XITSONGADIR) $(CONFIGDIR)/user-xitsonga-directory.txt | $$(dir $$@)
 	find $(word 1, $^) -name "$(notdir $@)" -type f -exec cp '{}' build/zerospeech/xitsonga/ \;
 
+.PRECIOUS: $(ZSPEECH-XITSONGA-ND)
+$(ZSPEECH-XITSONGA-ND): $(XITSONGADIR) $(CONFIGDIR)/user-xitsonga-directory.txt | $$(dir $$@)
+	find $(word 1, $^) -name "$(notdir $@)" -type f -exec cp '{}' build/zerospeech/xitsongaNoD/ \;
+
 build/zerospeech/sample/wav-rspecifier.scp: $(ZSPEECH-SAMPLE)
+	rm -f $@
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(wav))' >> $@;)
+	
+build/zerospeech/sampleNoD/wav-rspecifier.scp: $(ZSPEECH-SAMPLE-ND)
 	rm -f $@
 	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(wav))' >> $@;)
 	
@@ -132,7 +154,15 @@ build/zerospeech/sample/feats-wspecifier.scp: $(ZSPEECH-SAMPLE)
 	rm -f $@
 	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(basename $(wav)).mfcc)' >> $@;)
 	
+build/zerospeech/sampleNoD/feats-wspecifier.scp: $(ZSPEECH-SAMPLE-ND)
+	rm -f $@
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(basename $(wav)).mfcc)' >> $@;)
+	
 build/zerospeech/english/wav-rspecifier.scp: $(ZSPEECH-ENGLISH)
+	rm -f $@
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(wav))' >> $@;)
+	
+build/zerospeech/englishNoD/wav-rspecifier.scp: $(ZSPEECH-ENGLISH-ND)
 	rm -f $@
 	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(wav))' >> $@;)
 	
@@ -140,7 +170,15 @@ build/zerospeech/english/feats-wspecifier.scp: $(ZSPEECH-ENGLISH)
 	rm -f $@
 	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(basename $(wav)).mfcc)' >> $@;)
 	
+build/zerospeech/englishNoD/feats-wspecifier.scp: $(ZSPEECH-ENGLISH-ND)
+	rm -f $@
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(basename $(wav)).mfcc)' >> $@;)
+	
 build/zerospeech/xitsonga/wav-rspecifier.scp: $(ZSPEECH-XITSONGA)
+	rm -f $@
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(wav))' >> $@;)
+	
+build/zerospeech/xitsongaNoD/wav-rspecifier.scp: $(ZSPEECH-XITSONGA-ND)
 	rm -f $@
 	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(wav))' >> $@;)
 	
@@ -148,8 +186,16 @@ build/zerospeech/xitsonga/feats-wspecifier.scp: $(ZSPEECH-XITSONGA)
 	rm -f $@
 	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(basename $(wav)).mfcc)' >> $@;)
 	
+build/zerospeech/xitsongaNoD/feats-wspecifier.scp: $(ZSPEECH-XITSONGA-ND)
+	rm -f $@
+	$(foreach wav, $^,echo '$(notdir $(basename $(wav))) $(abspath $(basename $(wav)).mfcc)' >> $@;)
+	
 %mfccs: %wav-rspecifier.scp %feats-wspecifier.scp $(KALDIDIR)/src/featbin/compute-mfcc-feats $(KALDIDIR)/src/featbin/add-deltas $(CONFIGDIR)/user-kaldi-directory.txt
 	$(word 3, $^) scp:$(abspath $(word 1, $^)) scp:$(abspath $(word 2, $^))
 	$(word 4, $^) scp:$(abspath $(word 2, $^)) scp,t:$(abspath $(word 2, $^))
+	echo 'Done' > $@
+
+%mfccsNoD: %wav-rspecifier.scp %feats-wspecifier.scp $(KALDIDIR)/src/featbin/compute-mfcc-feats $(CONFIGDIR)/user-kaldi-directory.txt
+	$(word 3, $^) scp:$(abspath $(word 1, $^)) scp,t:$(abspath $(word 2, $^))
 	echo 'Done' > $@
 

@@ -96,8 +96,8 @@ def text2Xs(text, maxChar, ctable):
     nUtts = len(text)
     Xs = np.zeros((nUtts, maxChar, ctable.dim()), dtype=np.bool)
     for ui, utt in enumerate(text):
-        Xs[ui] = ctable.encode(pad(utt[:maxChar], maxChar, "X"), maxChar)
-        #Xs[ui] = ctable.encode(utt[:maxChar], maxChar)
+        #Xs[ui] = ctable.encode(pad(utt[:maxChar], maxChar, "X"), maxChar)
+        Xs[ui] = ctable.encode(utt[:maxChar], maxChar)
     return Xs
 
 def texts2Xs(text, maxChar, ctable):

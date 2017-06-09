@@ -141,6 +141,7 @@ if __name__ == "__main__":
     parser.add_argument("--reverseUtt", action='store_true')
     parser.add_argument("--debug", action='store_true')
     parser.add_argument("--algorithm", type=str, choices=['1best', 'importance', 'viterbi'], default='importance')
+    parser.add_argument("--optimizer", type=str, default='adam')
     parser.add_argument("--wordHidden")
     parser.add_argument("--uttHidden")
     parser.add_argument("--segHidden")
@@ -206,6 +207,7 @@ if __name__ == "__main__":
     ACOUSTIC = checkpoint.get('acoustic', args.acoustic)
     SEG_NET = checkpoint.get('segNet', not args.noSegNet)
     ALGORITHM = checkpoint.get('algorithm', args.algorithm)
+    OPTIM = checkpoint.get('optimizer', args.optimizer)
     REVERSE_UTT = checkpoint.get('reverseUtt', args.reverseUtt)
     MASK_VALUE = 0 if ACOUSTIC else 1
     wordHidden = checkpoint.get('wordHidden', int(args.wordHidden) if args.wordHidden else 100 if ACOUSTIC else 80)
@@ -230,12 +232,12 @@ if __name__ == "__main__":
     pretrain = checkpoint.get('pretrain', True)
     DEBUG = args.debug
     wordDecLayers = 1
-    RNN = recurrent.LSTM
-    OPTIM = 'rmsprop'
+    RNN = recurrent.GRU
 
     checkpoint['acoustic'] = ACOUSTIC
     checkpoint['segNet'] = SEG_NET
     checkpoint['algorithm'] = ALGORITHM
+    checkpoint['optimizer'] = OPTIM
     checkpoint['reverseUtt'] = REVERSE_UTT
     checkpoint['wordHidden'] = wordHidden
     checkpoint['uttHidden'] = uttHidden
@@ -399,6 +401,7 @@ if __name__ == "__main__":
         print('  Using segmenter network: %s' % SEG_NET, file=f)
         print('  Input data location: %s' % dataDir, file=f)
         print('  Autoencoder loss function: %s' % METRIC, file=f)
+        print('  Optimizer: %s' % OPTIM, file=f)
         print('  Word layer hidden units: %s' % wordHidden, file=f)
         print('  Utterance layer hidden units: %s' % uttHidden, file=f)
         print('  Segmenter network hidden units: %s' % segHidden, file=f)
@@ -424,6 +427,7 @@ if __name__ == "__main__":
               '--noSegNet' if not SEG_NET else '',
               '--reverseUtt' if REVERSE_UTT else '',
               '--algorithm %s' % ALGORITHM,
+              '--optimizer %s' % OPTIM,
               '--wordHidden %s' % wordHidden,
               '--uttHidden %s' % uttHidden,
               '--segHidden %s' % segHidden,
