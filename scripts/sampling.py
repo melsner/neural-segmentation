@@ -29,7 +29,7 @@ def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=F
         ## Zero-out scores for padding chars
         score = score * (np.expand_dims(Yae.argmax(-1), -1) > 0).any(-1, keepdims=True)
         ## Sum out char, len(chars)
-        score = score.sum(axis=(2, 3))
+        score = score.sum(axis=(2,3))
         # if debug:
         #     for u in range(len(score1)):
         #         for w in range(len(score1[u])):
@@ -41,6 +41,11 @@ def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=F
         #             raw_input('Press any key to continue')
         if reverseUtt:
             score = np.flip(score, 1)
+    elif metric == 'logprobbinary':
+        score = np.nan_to_num(np.log(preds)) * Yae + np.nan_to_num(np.log(1-preds)) * (1-Yae)
+        ## Zero-out scores for padding chars
+        score = score * (np.expand_dims(Xae.argmax(-1), -1) > 0).any(-1, keepdims=True)
+        score = np.expand_dims(score.sum(axis=(1,2)), -1)
     elif metric == 'mse':
         ## Initialize score as negative squared error
         score = -((preds - Yae) ** 2)
@@ -219,7 +224,7 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
 
     return segsOut, finalscore
 
-def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen=inf, delWt=0, oneLetterWt=0, segWt=0, verbose=True):
+def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen=inf, delWt=0, oneLetterWt=0, segWt=0, importanceSampledSegTargets = False, verbose=True):
     augscores = scores + penalties
     eScores = augscores.sum(-1)
     MM = np.max(eScores, axis=1, keepdims=True)
@@ -236,47 +241,52 @@ def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viter
         bestSamplePrior += samplePrior[ix, bestSampleXUtt[ix]]
     bestSamplePrior /= len(bestSampleXUtt)
     bestSegXUtt = np.array(bestSegXUtt)
+    nSeg = bestSegXUtt.sum()
     if verbose:
-        print('Best segmentation set: score = %s, prob = %s, num segs = %s' % (
-        bestSampleScore, bestSamplePrior, bestSegXUtt.sum()))
+        print('1-best segmentation set: score = %s, prob = %s, num segs = %s' % (
+        bestSampleScore, bestSamplePrior, nSeg))
 
     ## Proposal prob
-    priorSeg = np.expand_dims(np.squeeze(priorSeg, -1), 1)
-    qSeg = segs * priorSeg + (1 - segs) * (1 - priorSeg)
+    if algorithm == 'importance' or importanceSampledSegTargets:
+        priorSeg = np.expand_dims(np.squeeze(priorSeg, -1), 1)
+        qSeg = segs * priorSeg + (1 - segs) * (1 - priorSeg)
 
-    wts = np.expand_dims(samplePrior, -1) / qSeg
-    wts = wts / wts.sum(axis=1, keepdims=True)
+        wts = np.expand_dims(samplePrior, -1) / qSeg
+        wts = wts / wts.sum(axis=1, keepdims=True)
 
-    # print("score distr:", dist[:10])
+        # print("score distr:", dist[:10])
 
-    # print("shape of segment matrix", segmat.shape)
-    # print("best score sample", np.argmax(-scores))
-    # print("transformed losses for utt 0", eScores[:, 0])
-    # print("best score sample", np.argmax(eScores))
-    # best_score = np.argmax(eScores)
+        # print("shape of segment matrix", segmat.shape)
+        # print("best score sample", np.argmax(-scores))
+        # print("transformed losses for utt 0", eScores[:, 0])
+        # print("best score sample", np.argmax(eScores))
+        # best_score = np.argmax(eScores)
 
-    # print("top row of distr", pSeg[:, 0])
-    # print("top row of correction", qSeg[:, 0])
-    # print("top row of weights", wts[:, 0])
+        # print("top row of distr", pSeg[:, 0])
+        # print("top row of correction", qSeg[:, 0])
+        # print("top row of weights", wts[:, 0])
 
-    # sample x utterance x segment
-    # nSamples = segmat.shape[1]
-    wtSegs = segs * wts
+        # sample x utterance x segment
+        # nSamples = segmat.shape[1]
+        wtSegs = segs * wts
 
-    # for si in range(nSamples):
-    #    print("seg vector", si, segmat[si, 0, :])
-    #    print("est posterior", pSeg[si, 0])
-    #    print("q", qSeg[si, 0])
-    #    print("weight", wts[si, 0])
-    #    print("contrib", wtSegs[si, 0])
+        # for si in range(nSamples):
+        #    print("seg vector", si, segmat[si, 0, :])
+        #    print("est posterior", pSeg[si, 0])
+        #    print("q", qSeg[si, 0])
+        #    print("weight", wts[si, 0])
+        #    print("contrib", wtSegs[si, 0])
 
-    segTargetsXUtt = np.expand_dims(wtSegs.sum(axis=1), -1)
+        segTargetsXUtt = np.expand_dims(wtSegs.sum(axis=1), -1)
 
     if algorithm == '1best':
         ## Nothing changes, used best sample's segmentations
-        pass
+        if not importanceSampledSegTargets:
+            segTargetsXUtt = np.expand_dims(bestSegXUtt, -1)
     elif algorithm == 'importance':
         bestSegXUtt = segTargetsXUtt > .5
+        nSeg = bestSegXUtt.sum()
+        print('Importance-sampled segmentation set: num segs = %s' % nSeg)
     elif algorithm == 'viterbi':
         batch_score = 0
         for i in range(len(scores)):
@@ -289,6 +299,9 @@ def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viter
                                                       segWt)
             batch_score += utt_score
         print('Best Viterbi-decoded segmentation set: score = %s, num segs = %s' %(batch_score, bestSegXUtt.sum()))
+        nSeg = bestSegXUtt.sum()
+        if not importanceSampledSegTargets:
+            segTargetsXUtt = np.expand_dims(bestSegXUtt, -1)
     else:
         raise ValueError('''The sampling algorithm you have requested ("%s") is not supported.'
                             Please use one of the following:
@@ -296,7 +309,7 @@ def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viter
                             importance
                             1best
                             viterbi''')
-    return segTargetsXUtt, bestSegXUtt
+    return segTargetsXUtt, bestSegXUtt, nSeg
 
 
 def KL(pSeg1, pSeg2):

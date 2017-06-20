@@ -113,10 +113,28 @@ def readMFCCs(path, filter_file=None):
 
 
 ## WRITE METHODS
-def writeLog(iteration, epochLoss, epochAcc, epochDel, epochOneL, epochSeg, text, segsProposal, logdir, intervals=None, acoustic=False, print_headers=False):
+def writeLog(iteration, epochAELoss, epochAcc, epochSegLoss, epochDel, epochOneL, epochSeg, text, segsProposal, logdir, intervals=None, acoustic=False, print_headers=False):
+    headers = ['iteration']
+    outVar = [iteration]
+    if epochAELoss != None:
+        headers.append('epochAELoss')
+        outVar.append(epochAELoss)
+    if epochSegLoss != None:
+        headers.append('epochSegLoss')
+        outVar.append(epochSegLoss)
+    if epochAcc != None:
+        headers.append('epochAcc')
+        outVar.append(epochAcc)
+    if epochDel != None:
+        headers.append('epochDel')
+        outVar.append(epochDel)
+    if epochOneL != None:
+        headers.append('epochOneL')
+        outVar.append(epochOneL)
+    headers.append('epochSeg')
+    outVar.append(epochSeg)
     if acoustic:
         segsProposal = frameSegs2timeSegs(intervals, segsProposal)
-        headers = ['iteration', 'epochLoss', 'epochDel', 'epochOneL', 'epochSeg']
         scores = {'wrd': None, 'phn': None}
         if text['wrd']:
             headers += ['bp_wrd', 'br_wrd', 'bf_wrd', 'swp_wrd', 'swr_wrd', 'swf_wrd']
@@ -126,7 +144,7 @@ def writeLog(iteration, epochLoss, epochAcc, epochDel, epochOneL, epochSeg, text
             scores['phn'] = getSegScores(text['phn'], segsProposal, acoustic=True)
         for doc in set(scores['wrd'].keys() + scores['phn'].keys()):
             if not doc == '##overall##':
-                score_row = [iteration, epochLoss, epochDel, epochOneL, epochSeg]
+                score_row = outVar[:]
                 if text['wrd'] and scores['wrd'][doc]:
                     _, (bp,br,bf), _, (swp,swr,swf) = scores['wrd'][doc]
                     score_row += [bp, br, bf, swp, swr, swf]
@@ -140,7 +158,7 @@ def writeLog(iteration, epochLoss, epochAcc, epochDel, epochOneL, epochSeg, text
         with open(logdir+'/log.txt', 'ab') as f:
             if print_headers:
                 print("\t".join(headers), file=f)
-            score_row = [iteration, epochLoss, epochDel, epochOneL, epochSeg]
+            score_row = outVar[:]
             if text['wrd']:
                 _, (bp,br,bf), _, (swp,swr,swf) = scores['wrd']['##overall##']
                 score_row += [bp, br, bf, swp, swr, swf]
@@ -150,22 +168,20 @@ def writeLog(iteration, epochLoss, epochAcc, epochDel, epochOneL, epochSeg, text
             print("\t".join(["%g" % xx for xx in score_row]), file=f)
         return scores
     else:
+        headers += ["bp", "br", "bf", "swp", "swr", "swf", "lp", "lr", "lf"]
+        score_row = outVar[:]
         for doc in segsProposal:
             segmented = charSeq2WrdSeq(segsProposal[doc], text[doc])
             (bp,br,bf) = scoreBreaks(text[doc], segmented)
+            score_row += [bp,br,bf]
             (swp,swr,swf) = scoreWords(text[doc], segmented)
+            score_row += [swp,swr,swf]
             (lp,lr,lf) = scoreLexicon(text[doc], segmented)
+            score_row += [lp,lr,lf]
             with open(logdir+'/log.txt', 'ab') as f:
                 if print_headers:
-                    print("\t".join([
-                                    "iteration", "epochLoss", "epochAcc",
-                                    "epochDel", "epochOneL", "epochSeg",
-                                    "bp", "br", "bf", "swp", "swr", "swf",
-                                    "lp", "lr", "lf"]), file=f)
-                print("\t".join(["%g" % xx for xx in [
-                                iteration, epochLoss, epochAcc, epochDel, epochOneL, epochSeg,
-                                bp, br, bf, swp, swr, swf, lp, lr, lf
-                                ]]), file=f)
+                    print("\t".join(headers), file=f)
+                print("\t".join(["%g" % xx for xx in score_row]), file=f)
 
 ## Used only in text mode
 def writeSolutions(logdir, allBestSeg, text, iteration):

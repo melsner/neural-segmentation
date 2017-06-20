@@ -42,10 +42,12 @@ def precision_recall_f(n_matched, n_gold, n_proposed, beta=1.0):
 def getBreaks(words):
     breaks = []
     soFar = 0
+    # Don't count the first break (utterance beginning)
     for word in words:
         soFar += len(word)
         breaks.append(soFar)
-    breaks.pop(-1) #end-of-string isn't a break
+    # Don't count the last break (utterance end)
+    breaks.pop(-1)
     return breaks
 
 def scoreBreaks(surface, found):

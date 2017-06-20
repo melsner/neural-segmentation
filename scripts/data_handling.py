@@ -3,9 +3,8 @@ import sys, re, numpy as np
 from echo_words import CharacterTable, pad
 
 ## GENERAL METHODS
-def segs2pSegs(segs, alpha=0.05):
-    assert alpha >= 0.0 and alpha <= 0.5, 'Illegal value of alpha (0 <= alpha <= 0.5)'
-    return np.maximum(alpha, segs - alpha)
+def segs2pSegs(segs, interpolationRate=0.1):
+    return (1-interpolationRate) * segs + interpolationRate * 0.5 * np.ones_like(segs)
 
 def getMask(segmented):
     return np.squeeze(np.logical_not(segmented.any(-1, keepdims=True)), -1)
@@ -158,6 +157,7 @@ def charSeq2WrdSeq(segsXUtt, text):
 
 
 def reconstructUtt(charSeq, segs, maxUtt, wholeSent=False):
+    #print(segs)
     uttWds = np.where(segs)[0][:maxUtt]
     words = []
     s = 0
@@ -169,6 +169,9 @@ def reconstructUtt(charSeq, segs, maxUtt, wholeSent=False):
             e = uttWds[i+1]
         word = charSeq[s:e]
         words.append(word)
+        #print(uttWds)
+        #print(words)
+        #print('')
         assert(word != "")
         s = e
     if wholeSent:
@@ -382,16 +385,15 @@ def getNextFrameUtt(vad_breaks, BATCH_SIZE, start_ix=0):
         return start_ix + BATCH_SIZE
     return end_ix
 
-def seg2pSegWithForced(segs, vad_breaks, alpha=0.05):
-    assert alpha >= 0.0 and alpha <= 0.5, 'Illegal value of alpha (0 <= alpha <= 0.5)'
-    out = segs2pSegs(segs, alpha)
+def seg2pSegWithForced(segs, vad_breaks, interpolationRate=0.1):
+    out = segs2pSegs(segs, interpolationRate)
     out[np.where(vad_breaks)] = 1.
     return out
 
-def segs2pSegsWithForced(segs, vad_breaks, alpha=0.05):
+def segs2pSegsWithForced(segs, vad_breaks, interpolationRate=0.1):
     out = dict.fromkeys(segs.keys())
     for doc in segs:
-        out[doc] = seg2pSegWithForced(segs[doc], vad_breaks[doc], alpha=0.05)
+        out[doc] = seg2pSegWithForced(segs[doc], vad_breaks[doc], interpolationRate)
     return out
 
 def filterMFCCs(mfccs, intervals, segs, FRAME_SIZE=40):
