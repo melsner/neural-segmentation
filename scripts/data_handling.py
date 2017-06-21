@@ -19,7 +19,7 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False, check_output=Fa
     Xae = np.split(Xs, len(Xs))
     FRAME_SIZE = Xs.shape[-1]
     deletedChars = np.zeros((len(Xae), maxUtt))
-    oneLetter = np.zeros(len(Xae))
+    oneLetter = np.zeros((len(Xae), maxUtt))
     for i,utt in enumerate(Xae):
         utt_target = np.zeros((maxUtt, maxLen, FRAME_SIZE))
         utt = np.squeeze(utt, 0)[np.logical_not(Xs_mask[i])]
@@ -31,11 +31,11 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False, check_output=Fa
         for j in range(n_words):
             w_len = min(len(utt[j]), maxLen)
             w_target = np.zeros((maxLen, FRAME_SIZE))
-            deletedChars[i,j] += max(0, len(utt[j]) - maxLen)
-            oneLetter[i] += int(w_len == 1)
+            deletedChars[i,padwords+j] += max(0, len(utt[j]) - maxLen)
+            oneLetter[i,padwords+j] += int(w_len == 1)
             w_target[:w_len] = utt[j][:w_len]
             utt[j] = w_target
-            utt_target[padwords + j] = utt[j]
+            utt_target[padwords+j] = utt[j]
         extraWDel = 0
         for j in range(maxUtt, len(utt)):
             extraWDel += len(utt[j])

@@ -919,6 +919,9 @@ if __name__ == "__main__":
 
                 ## Zero-out segmentation probability in padding regions
                 pSegs_batch[np.where(Xs_mask_batch)] = 0.
+                # print(preds)
+                # print(INTERPOLATION_RATE * .5 * np.ones_like(preds))
+                # print(pSegs_batch)
 
             st0 = time.time()
             scores_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxUtt))
@@ -958,8 +961,17 @@ if __name__ == "__main__":
 
                 if AE_NET:
                     penalties_batch[:,s,:] -= deletedChars_batch * DEL_WT
-                    penalties_batch[:,s,:] -= (oneLetter_batch / maxUtt)[:, None] * ONE_LETTER_WT
-                penalties_batch[:,s,:] -= (np.squeeze(segs_batch, -1).sum(-1, keepdims=True) / maxUtt) * SEG_WT
+                    #print(deletedChars_batch)
+                    #print(deletedChars_batch.shape)
+                    #print(penalties_batch[:,s,:])
+                    penalties_batch[:,s,:] -= oneLetter_batch * ONE_LETTER_WT
+                    #print(oneLetter_batch)
+                    #print(oneLetter_batch.shape)
+                    #print(penalties_batch[:,s,:])
+                    #raw_input()
+                if SEG_WT > 0:
+                    for u in range(len(segs_batch)):
+                        penalties_batch[u,s,-segs_batch[u].sum():] -= SEG_WT
 
             print('')
 
@@ -1143,4 +1155,81 @@ if __name__ == "__main__":
         print('Iteration time: %.2fs' %(it1-it0))
 
     print("Logs in", logdir)
+
+    ## Check for local optimum by comparing mean AE loss for discovered vs. gold segmentation
+    if AE_NET:
+        Xae_found, deletedChars_found, oneLetter_found = XsSeg2Xae(Xs,
+                                                                   Xs_mask,
+                                                                   segsProposal,
+                                                                   maxUtt,
+                                                                   maxLen,
+                                                                   ACOUSTIC)
+
+        Yae_found = getYae(Xae_found, REVERSE_UTT, ACOUSTIC)
+
+        found_lossXutt = scoreXUtt(model,
+                                   Xae_found,
+                                   Yae_found,
+                                   BATCH_SIZE,
+                                   REVERSE_UTT,
+                                   METRIC)
+
+        found_loss = found_lossXutt.sum()
+
+        print('Sum of losses for each word using discovered segmentation: %.4f' %found_loss)
+
+        if ACOUSTIC:
+            if GOLDWRD:
+                _, goldseg = timeSegs2frameSegs(GOLDWRD)
+                goldsegXUtt = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+            else:
+                _, goldseg = timeSegs2frameSegs(GOLDPHN)
+                goldsegXUtt = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+        else:
+            goldsegXUtt = texts2Segs(gold, maxChar)
+
+
+        Xae_gold, deletedChars_gold, oneLetter_gold = XsSeg2Xae(Xs,
+                                                                Xs_mask,
+                                                                goldsegXUtt,
+                                                                maxUtt,
+                                                                maxLen,
+                                                                ACOUSTIC)
+
+        Yae_gold = getYae(Xae_gold, REVERSE_UTT, ACOUSTIC)
+
+        gold_lossXutt = scoreXUtt(model,
+                                  Xae_gold,
+                                  Yae_gold,
+                                  BATCH_SIZE,
+                                  REVERSE_UTT,
+                                  METRIC)
+
+        gold_loss = gold_lossXutt.sum()
+
+        print('Sum of losses for each word using gold segmentation%s: %.4f' %(' (word-level)' if (ACOUSTIC and GOLDWRD) else ' (phone-level) ' if (ACOUSTIC and GOLDPHN) else '', gold_loss))
+
+        if ACOUSTIC and GOLDWRD and GOLDPHN:
+            _, goldseg = timeSegs2frameSegs(GOLDPHN)
+            goldsegXUtt = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+
+            Xae_gold, deletedChars_gold, oneLetter_gold = XsSeg2Xae(Xs,
+                                                                    Xs_mask,
+                                                                    goldsegXUtt,
+                                                                    maxUtt,
+                                                                    maxLen,
+                                                                    ACOUSTIC)
+
+            Yae_gold = getYae(Xae_gold, REVERSE_UTT, ACOUSTIC)
+
+            gold_lossXutt = scoreXUtt(model,
+                                      Xae_gold,
+                                      Yae_gold,
+                                      BATCH_SIZE,
+                                      REVERSE_UTT,
+                                      METRIC)
+
+            gold_loss = gold_lossXutt.sum()
+
+            print('Sum of losses for each word using gold segmentation (phone-level): %.4f' % gold_loss)
 
