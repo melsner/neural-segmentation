@@ -1175,8 +1175,13 @@ if __name__ == "__main__":
                                    METRIC)
 
         found_loss = found_lossXutt.sum()
+        found_nChar = Xae_found.any(-1).sum()
 
         print('Sum of losses for each word using discovered segmentation: %.4f' %found_loss)
+        print('Deleted characters in segmentation: %d' % deletedChars_found.sum())
+        print('Input characterrs in segmentation: %d' % found_nChar.sum())
+        print('Loss per character: %.4f' %(float(found_loss)/found_nChar))
+        print()
 
         if ACOUSTIC:
             if GOLDWRD:
@@ -1206,8 +1211,13 @@ if __name__ == "__main__":
                                   METRIC)
 
         gold_loss = gold_lossXutt.sum()
+        gold_nChar = Xae_gold.any(-1).sum()
 
         print('Sum of losses for each word using gold segmentation%s: %.4f' %(' (word-level)' if (ACOUSTIC and GOLDWRD) else ' (phone-level) ' if (ACOUSTIC and GOLDPHN) else '', gold_loss))
+        print('Deleted characters in segmentation: %d' % deletedChars_gold.sum())
+        print('Input characterrs in segmentation: %d' % gold_nChar.sum())
+        print('Loss per character: %.4f' %(float(gold_loss)/gold_nChar))
+        print()
 
         if ACOUSTIC and GOLDWRD and GOLDPHN:
             _, goldseg = timeSegs2frameSegs(GOLDPHN)
@@ -1230,6 +1240,11 @@ if __name__ == "__main__":
                                       METRIC)
 
             gold_loss = gold_lossXutt.sum()
+            gold_nChar = Xae_gold.any(-1).sum()
 
             print('Sum of losses for each word using gold segmentation (phone-level): %.4f' % gold_loss)
+            print('Deleted characters in segmentation: %d' % deletedChars_gold.sum())
+            print('Input characterrs in segmentation: %d' % gold_nChar.sum())
+            print('Loss per character: %.4f' %(float(gold_loss)/gold_nChar))
+            print()
 
