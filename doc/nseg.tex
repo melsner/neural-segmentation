@@ -210,7 +210,7 @@ which correspond to different parameters of the model.
 As stated above, traditional segmentation models operate on phonemic
 transcriptions and must be adapted to cope with phonetic or acoustic
 input. For models which infer an explicit lexicon (i.e., those which
-do simply count segment transitions), this takes the form of a mapping
+do not simply count segment transitions), this takes the form of a mapping
 between the data and the space of ``underlying'' latent word
 forms.
 
@@ -251,7 +251,7 @@ their input without making inference more expensive.
 
 A few previous papers have used neural networks for word
 segmentation. \newcite{Christiansen98}, drawing on older work with
-Simple Recurrent Networks \cite{Elman90}, trains recurrent network as
+Simple Recurrent Networks \cite{Elman90}, trains a recurrent network as
 a language model. Word boundaries are extracted at points where the
 network predicts an upcoming utterance boundary; that is, utterance
 boundaries are used as distant supervision for the locations of word
@@ -406,7 +406,7 @@ predicted in the output. We penalize this by subtracting 50 for each
 deleted character. Finally, we find that, despite pre-training, the
 system may settle into an initial state where the phonological network
 simply embeds the characters and the utterance network learns a
-character LM. To avoid this, we substract 10 from the objective for
+character LM. To avoid this, we subtract 10 from the objective for
 each one-symbol word. These parameters were tuned only lightly; we
 increased the values until the problematic behavior (segmentation of
 the entire utterance as one word, or each character as a word) ceased.
@@ -636,7 +636,7 @@ our general architecture.
 \section{Conclusions and future directions}
 
 This work presented a new unsupervised LSTM architecture for discovering meaningful segments in representations of continuous speech.
-Memory limitations in the autencoder part of the network apply pressure to discover compressed representations much as human memory limitations have been argued to guide lexical acquisition.
+Memory limitations in the autoencoder part of the network apply pressure to discover compressed representations much as human memory limitations have been argued to guide lexical acquisition.
 By varying the size of the LSTM's hidden state, we showed that word segmentation performance on the Brent corpus is driven by memory limitations, with performance improving (up to a point) as we constrain the system's memory capacity.
 And by successfully deploying our system on both symbolic (character) and acoustic representations of speech, we demonstrated that our approach is flexible enough to adapt to either representation of the speech stimulus.
 
