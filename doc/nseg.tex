@@ -454,6 +454,7 @@ to subplot 3,3, with optimal performance at $H_p=80, H_d=200$. In
 other words, limiting the system's memory resources is indeed the key
 to its performance. The best score occurs at $H_p=80, H_u=400,
 D_p=0.5, D_u=0.25$ with a dev boundary F-score of 83\%.
+We used these parameters for our final evaluation, along with 100 hidden units in the proposal network.
 
 To further demonstrate that limited memory can bias the network to
 learn a low-entropy lexicon, we perform a separate experiment using
@@ -609,15 +610,17 @@ R\"{a}s\"{a}nen 15       & 75.7 & 33.7 & 46.7 & 9.6\\
 R\"{a}s\"{a}nen new       & 61.1 & 50.1 & 55.2 & 12.4\\
 Kamper 16       & 66.5 & 58.8 & 62.4 & 20.6\\
 \hline
-Ours & 63.4 & 43.0 & 51.2 & 9.5\\
+Ours & 62.4 & 43.2 & 51.1 & 9.3\\
 \end{tabular}
 \caption{Selected word segmentation results on the the Zerospeech 2015 English corpus.}
 \label{tab-acoust-results}
 \end{table}
 
-We trained the system for 70 iterations using parameters $H_p=20,
-H_u=400, D_p=0, D_u=0.25$ and 100 hidden units in the proposal
-LSTM. Results are presented in Table~\ref{tab-acoust-results}, along
+We trained the system for 80 iterations using parameters $H_p=20,
+H_u=400, D_p=0, D_u=0.25$ and 1500 hidden units in the proposal
+LSTM.
+In the auto-encoder network, we limited frames per utterance, words per utterance, and frames per word to 400, 16, and 100, respectively.
+Results are presented in Table~\ref{tab-acoust-results}, along
 with a comparison to results from other systems.  \newcite{Lyzinski15}
 and \newcite{Rasanen15} were entrants in the Zerospeech 2015
 challenge, in which \newcite{Rasanen15} performed best in the word
