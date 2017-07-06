@@ -11,7 +11,7 @@
 \usepackage{graphicx}
 
 % Uncomment this line for the final submission:
-%\emnlpfinalcopy
+\emnlpfinalcopy
 
 %  Enter the EMNLP Paper ID here:
 \def\emnlppaperid{***}
@@ -30,8 +30,10 @@
 
 % Author information can be set in various styles:
 % For several authors from the same institution:
-\author{Author 1 \and ... \and Author n \\
-        Address line \\ ... \\ Address line}
+\author{Micha Elsner \and Cory Shain \\
+        \texttt{melsner0@gmail.com} \and \texttt{shain.3@osu.edu} \\
+        Department of Linguistics \\ The Ohio State University,
+        Columbus, OH 43210}
 % if the names do not fit well on one line use
 %         Author 1 \\ {\bf Author 2} \\ ... \\ {\bf Author n} \\
 % For authors from different institutions:
@@ -210,7 +212,7 @@ which correspond to different parameters of the model.
 As stated above, traditional segmentation models operate on phonemic
 transcriptions and must be adapted to cope with phonetic or acoustic
 input. For models which infer an explicit lexicon (i.e., those which
-do simply count segment transitions), this takes the form of a mapping
+do not simply count segment transitions), this takes the form of a mapping
 between the data and the space of ``underlying'' latent word
 forms.
 
@@ -251,7 +253,7 @@ their input without making inference more expensive.
 
 A few previous papers have used neural networks for word
 segmentation. \newcite{Christiansen98}, drawing on older work with
-Simple Recurrent Networks \cite{Elman90}, trains recurrent network as
+Simple Recurrent Networks \cite{Elman90}, trains a recurrent network as
 a language model. Word boundaries are extracted at points where the
 network predicts an upcoming utterance boundary; that is, utterance
 boundaries are used as distant supervision for the locations of word
@@ -406,7 +408,7 @@ predicted in the output. We penalize this by subtracting 50 for each
 deleted character. Finally, we find that, despite pre-training, the
 system may settle into an initial state where the phonological network
 simply embeds the characters and the utterance network learns a
-character LM. To avoid this, we substract 10 from the objective for
+character LM. To avoid this, we subtract 10 from the objective for
 each one-symbol word. These parameters were tuned only lightly; we
 increased the values until the problematic behavior (segmentation of
 the entire utterance as one word, or each character as a word) ceased.
@@ -534,7 +536,8 @@ the infant data \cite{Bortfeld05}.
 
 \begin{figure}
 \includegraphics[width=\columnwidth]{learning-curve.pdf}
-\caption{Learning curve on the Brent dataset.}
+\caption{Boundary precision, recall, and F1 score by iteration on the
+  entire Brent dataset.}
 \label{fig-learning-curve}
 \end{figure}
 
@@ -612,13 +615,15 @@ Ours & 63.4 & 43.0 & 51.2 & 9.5\\
 \label{tab-acoust-results}
 \end{table}
 
-We trained the system for 70 iterations using parameters $H_p=20, H_u=400,
-D_p=0, D_u=0.25$. Results are presented in
-Table~\ref{tab-acoust-results}, along with a comparison to results
-from other systems.  \newcite{Lyzinski15} and \newcite{Rasanen15} were
-entrants in the Zerospeech 2015 challenge, in which \newcite{Rasanen15}
-performed best in the word boundary detection measure.  As shown in
-the table, our system beats both of these competitors' boundary detection scores, with a word detection score comparable to that of \newcite{Rasanen15}.  However,
+We trained the system for 70 iterations using parameters $H_p=20,
+H_u=400, D_p=0, D_u=0.25$ and 100 hidden units in the proposal
+LSTM. Results are presented in Table~\ref{tab-acoust-results}, along
+with a comparison to results from other systems.  \newcite{Lyzinski15}
+and \newcite{Rasanen15} were entrants in the Zerospeech 2015
+challenge, in which \newcite{Rasanen15} performed best in the word
+boundary detection measure.  As shown in the table, our system beats
+both of these competitors' boundary detection scores, with a word
+detection score comparable to that of \newcite{Rasanen15}.  However,
 since the challenge concluded, \newcite{RasanenND} have modified their
 system and improved their segmentation score,\footnote{The new results
   are not yet published. Those reported above are copied from the
@@ -636,16 +641,29 @@ our general architecture.
 \section{Conclusions and future directions}
 
 This work presented a new unsupervised LSTM architecture for discovering meaningful segments in representations of continuous speech.
-Memory limitations in the autencoder part of the network apply pressure to discover compressed representations much as human memory limitations have been argued to guide lexical acquisition.
+Memory limitations in the autoencoder part of the network apply pressure to discover compressed representations much as human memory limitations have been argued to guide lexical acquisition.
 By varying the size of the LSTM's hidden state, we showed that word segmentation performance on the Brent corpus is driven by memory limitations, with performance improving (up to a point) as we constrain the system's memory capacity.
 And by successfully deploying our system on both symbolic (character) and acoustic representations of speech, we demonstrated that our approach is flexible enough to adapt to either representation of the speech stimulus.
 
-In the future we hope to pursue a number of lines of inquiry.
-We plan to conduct more detailed parameter tuning in the acoustic domain and to segment the Xitsonga dataset supplied with the Zerospeech 2015 challenge.
-We also intend to introduce additional layers into the autoencoder network so as to allow for joint acquisition of phone-like, morph-like, and/or word-like units in the acoustic signal.
-And we plan to explore clustering techniques that would allow our system to discover categories in addition to probable segmentation points.
+In the future we hope to pursue a number of lines of inquiry.  We plan
+to conduct more detailed parameter tuning in the acoustic domain and
+to segment the Xitsonga dataset supplied with the Zerospeech 2015
+challenge.  We also intend to introduce additional layers into the
+autoencoder network so as to allow for joint acquisition of
+phone-like, morph-like, and/or word-like units in the acoustic signal;
+this may benefit from the alternate model structure of \newcite{Chung17}.
+And we plan to explore clustering techniques that would allow our
+system to discover categories in addition to probable segmentation
+points.
 
-%% \section*{Acknowledgments}
+\section*{Acknowledgments}
+
+We thank members of the Clippers discussion group (especially
+Joo-Kyung Kim, Eric Fosler-Lussier and Wei Xu) and three anonymous
+reviewers. Computations for this project were run on a Titan-X GPU
+donated by the NVIDIA Hardware Grant program and on the Ohio
+Supercomputer (\citeyear{OhioSupercomputerCenter1987}). Funding was provided
+by NSF \#1422987.
 
 %% Do not number the acknowledgment section.
 
