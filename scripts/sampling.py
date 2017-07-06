@@ -248,13 +248,13 @@ def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viter
     bestSamplePrior /= len(bestSampleXUtt)
     bestSegXUtt = np.array(bestSegXUtt)
     nSeg = bestSegXUtt.sum()
-    print('best')
-    print(bestSampleScore)
-    print(nSeg)
-    print()
-    for i in range(segs.shape[1]):
-        print(augscores[:,i].sum())
-        print(segs[:,i].sum())
+    # print('best')
+    # print(bestSampleScore)
+    # print(nSeg)
+    # print('')
+    # for i in range(segs.shape[1]):
+    #     print(augscores[:,i].sum())
+    #     print(segs[:,i].sum())
     if verbose:
         print('1-best segmentation set: score = %s, prob = %s, num segs = %s' % (
         bestSampleScore, bestSamplePrior, nSeg))
@@ -327,4 +327,3 @@ def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viter
 
 def KL(pSeg1, pSeg2):
     return np.mean(pSeg1 * (np.log(pSeg1 / pSeg2)) + (1 - pSeg1) * (np.log((1 - pSeg1) / (1 - pSeg2))))
-
