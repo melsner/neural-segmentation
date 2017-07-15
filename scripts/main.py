@@ -591,6 +591,7 @@ if __name__ == "__main__":
     parser.add_argument("--wordDropout")
     parser.add_argument("--charDropout")
     parser.add_argument("--depth")
+    parser.add_argument("--segShift")
     parser.add_argument("--metric")
     parser.add_argument("--pretrainIters")
     parser.add_argument("--trainNoSegIters")
@@ -704,6 +705,7 @@ if __name__ == "__main__":
     maxUtt = checkpoint.get('maxUtt', int(args.maxUtt) if args.maxUtt else 50 if ACOUSTIC else 10)
     maxLen = checkpoint.get('maxLen', int(args.maxLen) if args.maxLen else 100 if ACOUSTIC else 7)
     DEPTH = checkpoint.get('depth', int(args.depth) if args.depth != None else 1)
+    SEG_SHIFT = args.segShift if args.segShift != None else checkpoint.get('segShift', 0 if ACOUSTIC else 0)
     pretrainIters = int(args.pretrainIters) if args.pretrainIters else checkpoint.get('pretrainIters', 10 if ACOUSTIC else 10)
     trainNoSegIters = int(args.trainNoSegIters) if args.trainNoSegIters else checkpoint.get('trainNoSegIters', 10 if ACOUSTIC else 10)
     trainIters = int(args.trainIters) if args.trainIters else checkpoint.get('trainIters', 100 if ACOUSTIC else 80)
@@ -722,7 +724,6 @@ if __name__ == "__main__":
     pretrain = checkpoint.get('pretrain', True)
     DEBUG = args.debug
     RNN = recurrent.LSTM
-    SEG_SHIFT = 3
     VIZ_COUNT = 10
     if SEG_NET and not AE_NET:
         METRIC = 'logprobbinary'
@@ -755,6 +756,7 @@ if __name__ == "__main__":
     checkpoint['maxUtt'] = maxUtt
     checkpoint['maxLen'] = maxLen
     checkpoint['depth'] = DEPTH
+    checkpoint['segShift'] = SEG_SHIFT
     checkpoint['pretrainIters'] = pretrainIters
     checkpoint['trainNoSegIters'] = trainNoSegIters
     checkpoint['trainIters'] = trainIters
@@ -874,6 +876,7 @@ if __name__ == "__main__":
         print('  Word dropout rate: %s' % wordDropout, file=f)
         print('  Character dropout rate: %s' % charDropout, file=f)
         print('  RNN depth: %s' % DEPTH, file=f)
+        print('  Segmenter target offset: %s' % SEG_SHIFT, file=f)
         print('  Loss metric: %s' % METRIC, file=f)
         print('  Pretraining iterations: %s' % pretrainIters, file=f)
         print('  Training iterations without segmenter network: %s' % trainNoSegIters, file=f)
@@ -913,6 +916,7 @@ if __name__ == "__main__":
               '--wordDropout %s' % wordDropout,
               '--charDropout %s' % charDropout,
               '--depth %s' % DEPTH,
+              '--segShift %s' % SEG_SHIFT,
               '--metric %s' % METRIC,
               '--pretrainIters %s' % pretrainIters,
               '--trainNoSegIters %s' % trainNoSegIters,
@@ -1807,20 +1811,20 @@ if __name__ == "__main__":
         segsProposal = segsProposal[p_inv]
 
         iteration += 1
-        batch_num_global = 0
+        b = 0
 
         if crossValDir == None:
             # Evaluate on training data
             if AE_NET:
                 n = 10
-                Xae, _, _ = XsSeg2Xae(Xs[:n],
-                                      Xs_mask[:n],
-                                      segsProposal[:n],
+                Xae, _, _ = XsSeg2Xae(Xs,
+                                      Xs_mask,
+                                      segsProposal,
                                       maxUtt,
                                       maxLen,
                                       ACOUSTIC)
 
-                plotPredsUtt(10,
+                plotPredsUtt(utt_ids,
                              ae_full,
                              Xae,
                              getYae(Xae, REVERSE_UTT, ACOUSTIC),
@@ -1843,7 +1847,8 @@ if __name__ == "__main__":
                     masked_proposal = np.ma.array(segsProposalXDoc[doc], mask=Xs_mask[s:e])
                     segsProposalXDoc[doc] = masked_proposal.compressed()
 
-            segScore = writeLog(iteration,
+            segScore = writeLog(1,
+                                iteration,
                                 epochAELoss if AE_NET else None,
                                 epochAEAcc if (not ACOUSTIC and AE_NET) else None,
                                 epochSegLoss if SEG_NET else None,
@@ -1855,7 +1860,7 @@ if __name__ == "__main__":
                                 logdir,
                                 intervals if ACOUSTIC else None,
                                 ACOUSTIC,
-                                print_headers=iteration == 1)
+                                print_headers=not os.path.isfile(logdir + '/log.txt'))
 
 
             print('Total frames:', raw_total)
@@ -1894,6 +1899,7 @@ if __name__ == "__main__":
         with open(logdir + '/checkpoint.obj', 'wb') as f:
             checkpoint['iteration'] = iteration
             checkpoint['batch_num_global'] = batch_num_global
+            checkpoint['b'] = b
             checkpoint['segsProposal'] = []
             pickle.dump(checkpoint, f)
 
