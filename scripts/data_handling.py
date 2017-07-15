@@ -15,6 +15,29 @@ def getMasks(segmented):
         masks[doc] = getMask(segmented[doc])
     return masks
 
+def XsSeg2XaePhon(Xs, Xs_mask, segs, maxLen):
+    Xae = np.split(Xs, len(Xs))
+    FRAME_SIZE = Xs.shape[-1]
+    deletedChars = []
+    oneLetter = []
+    Xae_phon = []
+    for i, utt in enumerate(Xae):
+        utt = np.squeeze(utt, 0)[np.logical_not(Xs_mask[i])]
+        utt = np.split(utt, np.where(segs[i, :len(utt)])[0])
+        if len((utt[0])) == 0:
+            utt.pop(0)
+        for j in range(len(utt)):
+            w_len = min(len(utt[j]), maxLen)
+            w_target = np.zeros((maxLen, FRAME_SIZE))
+            deletedChars.append(max(0, len(utt[j]) - maxLen))
+            oneLetter.append(int(w_len == 1))
+            w_target[:w_len] = utt[j][:w_len]
+            Xae_phon.append(w_target)
+    Xae_phon = np.stack(Xae_phon)
+    deletedChars = np.array(deletedChars)
+    oneLetter = np.array(oneLetter)
+    return Xae_phon, deletedChars, oneLetter
+
 def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False, check_output=False):
     Xae = np.split(Xs, len(Xs))
     FRAME_SIZE = Xs.shape[-1]
@@ -79,10 +102,11 @@ def XsSegs2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False):
         oneLetter.append(oneLetter_doc)
     return np.concatenate(Xae), np.concatenate(deletedChars), np.concatenate(oneLetter)
 
-def getYae(Xae, reverseUtt, acoustic=False):
-    charDim = Xae.shape[-1]
+def getYae(Xae, reverseUtt, utts=True):
     if reverseUtt:
         Yae = np.flip(Xae, 1)
+        if utts:
+            Yae = np.flip(Yae, 2)
     else:
         Yae = Xae
     return Yae
@@ -216,7 +240,7 @@ def reconstructXae(Xae, ctable):
     return reconstruction
 
 def printReconstruction(n, model, Xae, ctable, batch_size, reverseUtt):
-    Yae = getYae(Xae, reverseUtt, False)
+    Yae = getYae(Xae, reverseUtt)
     preds = model.predict(Xae[:n], batch_size=batch_size)
     print('Sum of autoencoder predictions: %s' % preds.sum())
     input_reconstruction = reconstructXae(Xae[:n], ctable)

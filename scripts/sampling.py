@@ -59,10 +59,42 @@ def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=F
             score = np.flip(score, 1)
     else:
         raise ValueError('''The loss metric you have requested ("%s") is not supported.
-                            Supported metrics are "logprob" and "mse".''')
+                            Supported metrics are "logprob" and "mse".''' %metric)
 
     ## Zero out losses from padding regions
     return score
+
+def lossXChar(model, Xae, Yae, batch_size, acoustic=False, loss='xent'):
+    preds = model.predict(Xae, batch_size=batch_size)
+
+    if acoustic:
+        # MSE loss
+        real_chars = Yae.any(-1, keepdims=True)
+    else:
+        real_chars = (np.expand_dims(Yae.argmax(-1), -1) > 0).any(-1, keepdims=True)
+
+    if loss == 'xent':
+        # Cross-entropy loss
+        loss = - np.nan_to_num(np.log(preds)) * Yae
+        ## Zero-out scores for padding chars
+        loss *= real_chars
+    elif loss == 'binary-xent':
+        # Binary cross-entropy loss
+        loss = - (np.nan_to_num(np.log(preds))*Yae + np.nan_to_num(np.log(1-preds))*(1-Yae))
+        loss *= real_chars
+    elif loss == 'mse':
+        # MSE loss
+        loss = (Yae - preds) ** 2
+        ## Zero-out scores for padding chars
+        loss *= real_chars
+        loss = loss.mean(-1)
+    else:
+        raise ValueError('''The loss metric you have requested ("%s") is not supported.
+                                    Supported metrics are "logprob" and "mse".''' %loss)
+
+    loss = loss.sum() / real_chars.sum()
+
+    return loss
 
 class Node(object):
     def __init__(self, t=None):

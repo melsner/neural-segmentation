@@ -328,10 +328,10 @@ def scoreLexicon(underlying, found):
 
     return precision_recall_f(matched, actual, proposed)
 
-def getSegScore(segsGold, segsProposal):
-    return list(scoreFrameSegs(segsGold, segsProposal))
+def getSegScore(segsGold, segsProposal, tol=.03):
+    return list(scoreFrameSegs(segsGold, segsProposal, tol))
 
-def getSegScores(segsGold, segsProposal, acoustic=False, out_file=None):
+def getSegScores(segsGold, segsProposal, tol=.03, acoustic=False, out_file=None):
     scores = dict.fromkeys(segsProposal.keys())
     if not out_file:
         out_file = sys.stdout
@@ -339,7 +339,7 @@ def getSegScores(segsGold, segsProposal, acoustic=False, out_file=None):
     for doc in sorted(segsProposal.keys()):
         if doc in segsGold:
             if acoustic:
-                scores[doc] = getSegScore(segsGold[doc], segsProposal[doc])
+                scores[doc] = getSegScore(segsGold[doc], segsProposal[doc], tol)
                 (bm,ba,bP), (bp,br,bf), (swm,swa,swP), (swp,swr,swf) = scores[doc] 
                 bm_tot, ba_tot, bP_tot = bm_tot+bm, ba_tot+ba, bP_tot+bP
                 swm_tot, swa_tot, swP_tot = swm_tot+swm, swa_tot+swa, swP_tot+swP
