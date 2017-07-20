@@ -14,7 +14,7 @@
 \emnlpfinalcopy
 
 %  Enter the EMNLP Paper ID here:
-\def\emnlppaperid{***}
+\def\emnlppaperid{445}
 
 % To expand the titlebox for more authors, uncomment
 % below and set accordingly.
@@ -79,7 +79,9 @@ lexical items into phonological working memory, but represents the
 entire sentence as a higher-level syntactic structure without
 phonological detail. Our model implements this architecture using
 encoder-decoder LSTMs with limited memory capacity, then searches for
-word segmentations which make it easy to remember the sentence.
+word segmentations which make it easy to remember the
+sentence.\footnote{The system is available from
+  \url{https://github.com/melsner/neural-segmentation}.}
 
 Word learning has been extensively studied in previous research, both
 with transcribed symbolic input and acoustics. Why attempt yet another
@@ -450,7 +452,7 @@ of dropout, the best systems tend to have small numbers of hidden
 units (dark regions in the lower left); for larger dropout, more
 hidden units can be useful. For instance, compare the top left
 subplot, with 0 dropout and good performance with $H_p=20, H_u=100$,
-to subplot 3,3, with optimal performance at $H_p=80, H_d=200$. In
+to subplot 3,3, with optimal performance at $H_p=80, H_u=200$. In
 other words, limiting the system's memory resources is indeed the key
 to its performance. The best score occurs at $H_p=80, H_u=400,
 D_p=0.5, D_u=0.25$ with a dev boundary F-score of 83\%.
