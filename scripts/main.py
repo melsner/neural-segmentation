@@ -1315,6 +1315,7 @@ if __name__ == "__main__":
                              REVERSE_UTT,
                              iteration+1,
                              batch_num_global,
+                             acoustic = ACOUSTIC,
                              nResample = N_RESAMPLE,
                              ae_full = ae_full if AE_NET else None,
                              segmenter = segmenter if SEG_NET else None,
