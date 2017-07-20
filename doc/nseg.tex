@@ -367,7 +367,7 @@ will be more likely if it appeared in samples with low reconstruction
 loss, especially if it is not encouraged by the current proposal.
 
 \begin{align}
-P(x|B_i) &= \frac{P(B_i|x)P(B_i)}{P(x)} \approx \frac{\exp(L_i)}{\sum_j
+P(x|B_i) &= \frac{P(B_i|x)P(x)}{P(B_i)} \approx \frac{\exp(L_i)}{\sum_j
   \exp(L_j)}
 \label{eq-post}\\
 w_i^t &= \frac{P(x|B_i)}{P_{seg}^t(B_i^t)}
