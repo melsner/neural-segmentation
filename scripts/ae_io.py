@@ -6,7 +6,7 @@ frameInputs2Utts, frameSegs2FrameSegsXUtt, texts2Xs, getMask, reconstructXs
 from echo_words import CharacterTable
 
 ## READ METHODS
-def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False):
+def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, scoreInit=False):
     if acoustic:
         segfile_paths = [dataDir + x for x in os.listdir(dataDir) if x.endswith('_vad.txt')]
         goldwrd_paths = [dataDir + x for x in os.listdir(dataDir) if x.endswith('.wrd')]
@@ -51,14 +51,15 @@ def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False):
             raw = filterMFCCs(raw, intervals, segs_init, FRAME_SIZE)
             checkpoint['raw'] = raw
 
-        if gold['wrd'] and not args.supervisedSegmenter:
-            print('Initial word segmentation scores:')
-            printSegScores(getSegScores(gold['wrd'], frameSegs2timeSegs(intervals, segs_init), acoustic), True)
-            print()
-        if gold['phn'] and not args.supervisedSegmenter:
-            print('Initial phone segmentation scores:')
-            printSegScores(getSegScores(gold['phn'], frameSegs2timeSegs(intervals, segs_init), acoustic), True)
-            print()
+        if scoreInit:
+            if gold['wrd']:
+                print('Initial word segmentation scores:')
+                printSegScores(getSegScores(gold['wrd'], frameSegs2timeSegs(intervals, segs_init), 0.03, acoustic), True)
+                print()
+            if gold['phn']:
+                print('Initial phone segmentation scores:')
+                printSegScores(getSegScores(gold['phn'], frameSegs2timeSegs(intervals, segs_init), 0.02, acoustic), True)
+                print()
 
     else:
         if 'gold' in checkpoint and 'raw' in checkpoint and 'charset' in checkpoint:
@@ -222,7 +223,8 @@ def readMFCCs(path, filter_file=None):
 
 
 ## WRITE METHODS
-def writeLog(batch_num_global, iteration, epochAELoss, epochAcc, epochSegLoss, epochDel, epochOneL, epochSeg, text, segsProposal, logdir, intervals=None, acoustic=False, print_headers=False):
+def writeLog(batch_num_global, iteration, epochAELoss, epochAcc, epochSegLoss, epochDel, epochOneL, epochSeg, gold,
+             segsProposal, logdir, intervals=None, acoustic=False, print_headers=False, filename='log.txt'):
     headers = ['Batch', 'Iteration']
     outVar = [batch_num_global, iteration]
     if epochAELoss != None:
@@ -245,33 +247,33 @@ def writeLog(batch_num_global, iteration, epochAELoss, epochAcc, epochSegLoss, e
     if acoustic:
         segsProposal = frameSegs2timeSegs(intervals, segsProposal)
         scores = {'wrd': None, 'phn': None}
-        if text['wrd']:
+        if gold['wrd']:
             headers += ['bp_wrd', 'br_wrd', 'bf_wrd', 'swp_wrd', 'swr_wrd', 'swf_wrd']
-            scores['wrd'] = getSegScores(text['wrd'], segsProposal, tol = .03, acoustic=True)
-        if text['phn']:
+            scores['wrd'] = getSegScores(gold['wrd'], segsProposal, tol = .03, acoustic=True)
+        if gold['phn']:
             headers += ['bp_phn', 'br_phn', 'bf_phn', 'swp_phn', 'swr_phn', 'swf_phn']
-            scores['phn'] = getSegScores(text['phn'], segsProposal, tol = .02, acoustic=True)
+            scores['phn'] = getSegScores(gold['phn'], segsProposal, tol = .02, acoustic=True)
         for doc in set(scores['wrd'].keys() + scores['phn'].keys()):
             if not doc == '##overall##':
                 score_row = outVar[:]
-                if text['wrd'] and scores['wrd'][doc]:
+                if gold['wrd'] and scores['wrd'][doc]:
                     _, (bp,br,bf), _, (swp,swr,swf) = scores['wrd'][doc]
                     score_row += [bp, br, bf, swp, swr, swf]
-                if text['phn'] and scores['phn'][doc]:
+                if gold['phn'] and scores['phn'][doc]:
                     _, (bp,br,bf), _, (swp,swr,swf) = scores['phn'][doc]
                     score_row += [bp, br, bf, swp, swr, swf]
-                with open(logdir+'/'+doc+'_log.txt', 'ab') as f:
+                with open(logdir+'/'+doc+'_'+filename, 'ab') as f:
                     if print_headers:
                         print("\t".join(headers), file=f)
                     print("\t".join(["%g" % xx for xx in score_row]), file=f)
-        with open(logdir+'/log.txt', 'ab') as f:
+        with open(logdir+'/'+filename, 'ab') as f:
             if print_headers:
                 print("\t".join(headers), file=f)
             score_row = outVar[:]
-            if text['wrd']:
+            if gold['wrd']:
                 _, (bp,br,bf), _, (swp,swr,swf) = scores['wrd']['##overall##']
                 score_row += [bp, br, bf, swp, swr, swf]
-            if text['phn']:
+            if gold['phn']:
                 _, (bp,br,bf), _, (swp,swr,swf) = scores['phn']['##overall##']
                 score_row += [bp, br, bf, swp, swr, swf]
             print("\t".join(["%g" % xx for xx in score_row]), file=f)
@@ -280,23 +282,23 @@ def writeLog(batch_num_global, iteration, epochAELoss, epochAcc, epochSegLoss, e
         headers += ["bp", "br", "bf", "swp", "swr", "swf", "lp", "lr", "lf"]
         score_row = outVar[:]
         for doc in segsProposal:
-            segmented = charSeq2WrdSeq(segsProposal[doc], text[doc])
-            (bp,br,bf) = scoreBreaks(text[doc], segmented)
+            segmented = charSeq2WrdSeq(segsProposal[doc], gold[doc])
+            (bp,br,bf) = scoreBreaks(gold[doc], segmented)
             score_row += [bp,br,bf]
-            (swp,swr,swf) = scoreWords(text[doc], segmented)
+            (swp,swr,swf) = scoreWords(gold[doc], segmented)
             score_row += [swp,swr,swf]
-            (lp,lr,lf) = scoreLexicon(text[doc], segmented)
+            (lp,lr,lf) = scoreLexicon(gold[doc], segmented)
             score_row += [lp,lr,lf]
-            with open(logdir+'/log.txt', 'ab') as f:
+            with open(logdir+'/'+filename, 'ab') as f:
                 if print_headers:
                     print("\t".join(headers), file=f)
                 print("\t".join(["%g" % xx for xx in score_row]), file=f)
 
 ## Used only in text mode
-def writeSolutions(logdir, allBestSeg, text, iteration):
+def writeSolutions(logdir, allBestSeg, text, iteration, filename='seg.txt'):
     segmented = charSeq2WrdSeq(allBestSeg, text)
 
-    logfile = file(logdir + "/segmented-%d.txt" % iteration, 'w')
+    logfile = file(logdir + '/' + str(iteration) + '_' + filename, 'w')
     if type(text[0][0]) == str:
         for line in segmented:
             print(" ".join(line), file=logfile)
@@ -339,13 +341,13 @@ def writeTimeSeg(seg, out_file=sys.stdout, docname=None, TextGrid=False):
             else:
                 print('%s %s' %i, file=out_file)
 
-def writeTimeSegs(segs, out_dir='./', TextGrid=False):
+def writeTimeSegs(segs, out_dir='./', TextGrid=False, dataset='train'):
     assert type(out_dir) == str, 'out_file must be a directory path.'
     out_dir = out_dir + '/'
     if TextGrid:
-        suffix = '.TextGrid'
+        suffix = '_' + dataset + '.TextGrid'
     else:
-        suffix = '_seg.txt'
+        suffix = 'seg_' + dataset + '.txt'
     for doc in segs:
         with open(out_dir + doc + suffix, 'wb') as f:
             writeTimeSeg(segs[doc], out_file=f, docname=doc, TextGrid=TextGrid)

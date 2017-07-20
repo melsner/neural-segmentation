@@ -257,16 +257,10 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
     return segsOut, finalscore
 
 def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen=inf, delWt=0, oneLetterWt=0, segWt=0, importanceSampledSegTargets = False, verbose=True):
-    #print(scores)
-    #print(scores.sum(-1))
-    #print(penalties)
-    #print(penalties.sum(-1))
     augscores = scores + penalties
-    #print(augscores.sum(-1))
-    #raw_input()
     eScores = augscores.sum(-1)
     MM = np.max(eScores, axis=1, keepdims=True)
-    eScores = np.exp(eScores - MM + 1e-5)
+    eScores = np.exp(eScores - MM)
     # approximately the probability of the sample given the data
     samplePrior = eScores / eScores.sum(axis=1, keepdims=True)
     bestSampleXUtt = np.argmax(samplePrior, axis=1)

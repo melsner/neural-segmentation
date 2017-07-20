@@ -1,5 +1,6 @@
 from __future__ import print_function, division
 import sys, re, numpy as np
+from scipy.signal import resample
 from echo_words import CharacterTable, pad
 
 ## GENERAL METHODS
@@ -15,7 +16,7 @@ def getMasks(segmented):
         masks[doc] = getMask(segmented[doc])
     return masks
 
-def XsSeg2XaePhon(Xs, Xs_mask, segs, maxLen):
+def XsSeg2XaePhon(Xs, Xs_mask, segs, maxLen, nResample=None):
     Xae = np.split(Xs, len(Xs))
     FRAME_SIZE = Xs.shape[-1]
     deletedChars = []
@@ -28,23 +29,28 @@ def XsSeg2XaePhon(Xs, Xs_mask, segs, maxLen):
             utt.pop(0)
         for j in range(len(utt)):
             w_len = min(len(utt[j]), maxLen)
-            w_target = np.zeros((maxLen, FRAME_SIZE))
+            w_target = np.zeros((nResample if nResample else maxLen, FRAME_SIZE))
             deletedChars.append(max(0, len(utt[j]) - maxLen))
             oneLetter.append(int(w_len == 1))
-            w_target[:w_len] = utt[j][:w_len]
+            if nResample:
+                word = resample(utt[j][:w_len], nResample)
+                w_len = maxLen
+            else:
+                word = utt[j][:w_len]
+            w_target[:w_len] = word
             Xae_phon.append(w_target)
     Xae_phon = np.stack(Xae_phon)
     deletedChars = np.array(deletedChars)
     oneLetter = np.array(oneLetter)
     return Xae_phon, deletedChars, oneLetter
 
-def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False, check_output=False):
+def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, nResample=None, check_output=False):
     Xae = np.split(Xs, len(Xs))
     FRAME_SIZE = Xs.shape[-1]
     deletedChars = np.zeros((len(Xae), maxUtt))
     oneLetter = np.zeros((len(Xae), maxUtt))
     for i,utt in enumerate(Xae):
-        utt_target = np.zeros((maxUtt, maxLen, FRAME_SIZE))
+        utt_target = np.zeros((maxUtt, nResample if nResample else maxLen, FRAME_SIZE))
         utt = np.squeeze(utt, 0)[np.logical_not(Xs_mask[i])]
         utt = np.split(utt, np.where(segs[i,:len(utt)])[0])
         if len((utt[0])) == 0:
@@ -53,10 +59,15 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False, check_output=Fa
         padwords = maxUtt - n_words
         for j in range(n_words):
             w_len = min(len(utt[j]), maxLen)
-            w_target = np.zeros((maxLen, FRAME_SIZE))
+            w_target = np.zeros((nResample if nResample else maxLen, FRAME_SIZE))
             deletedChars[i,padwords+j] += max(0, len(utt[j]) - maxLen)
             oneLetter[i,padwords+j] += int(w_len == 1)
-            w_target[:w_len] = utt[j][:w_len]
+            if nResample:
+                word = resample(utt[j][:w_len], nResample)
+                w_len = maxLen
+            else:
+                word = utt[j][:w_len]
+            w_target[:w_len] = word
             utt[j] = w_target
             utt_target[padwords+j] = utt[j]
         extraWDel = 0
@@ -86,7 +97,7 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False, check_output=Fa
 
     return Xae, deletedChars, oneLetter
 
-def XsSegs2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False):
+def XsSegs2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, nResamp=None):
     Xae = []
     deletedChars = []
     oneLetter = []
@@ -96,7 +107,7 @@ def XsSegs2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, acoustic=False):
                                                              segs[doc],
                                                              maxUtt,
                                                              maxLen,
-                                                             acoustic)
+                                                             nResamp)
         Xae.append(Xae_doc)
         deletedChars.append(deletedChars_doc)
         oneLetter.append(oneLetter_doc)
@@ -110,6 +121,34 @@ def getYae(Xae, reverseUtt, utts=True):
     else:
         Yae = Xae
     return Yae
+
+
+
+def printSegAnalysis(model, Xs, Xs_mask, segs, maxUtt, maxLen, metric, batch_size, reverse_utt, acoustic):
+    Xae_found, deletedChars_found, oneLetter_found = XsSeg2Xae(Xs,
+                                                               Xs_mask,
+                                                               segs,
+                                                               maxUtt,
+                                                               maxLen,
+                                                               acoustic)
+
+    Yae_found = getYae(Xae_found, reverse_utt)
+
+    found_lossXutt = scoreXUtt(model,
+                               Xae_found,
+                               Yae_found,
+                               batch_size,
+                               reverse_utt,
+                               metric)
+
+    found_loss = found_lossXutt.sum()
+    found_nChar = Xae_found.any(-1).sum()
+
+    print('Total loss (sum of losses): %s' % found_loss)
+    print('Deleted characters in segmentation: %d' % deletedChars_found.sum())
+    print('Input characterrs in segmentation: %d' % found_nChar.sum())
+    print('Loss per character: %.4f' % (float(found_loss) / found_nChar))
+    print()
 
 
 
@@ -193,9 +232,9 @@ def reconstructUtt(charSeq, segs, maxUtt, wholeSent=False):
             e = uttWds[i+1]
         word = charSeq[s:e]
         words.append(word)
-        #print(uttWds)
-        #print(words)
-        #print('')
+        # print(uttWds)
+        # print(words)
+        # print('')
         assert(word != "")
         s = e
     if wholeSent:

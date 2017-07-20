@@ -20,8 +20,8 @@ import sys
 import re
 import copy
 import time
+import signal
 from itertools import izip
-import matplotlib.pyplot as plt
 from collections import defaultdict
 from echo_words import CharacterTable, pad
 from capacityStatistics import getPseudowords
@@ -29,6 +29,29 @@ from ae_io import *
 from data_handling import *
 from sampling import *
 from scoring import *
+from network import *
+from plotting import *
+
+class sigHandler(object):
+    def __init__(self):
+        self.sigint_received = False
+        self.interrupt_allowed = True
+
+    def disallow_interrupt(self):
+        self.interrupt_allowed = False
+
+    def allow_interrupt(self):
+        self.interrupt_allowed = True
+        if self.sigint_received == True:
+            sys.exit(0)
+
+    def interrupt(self, signum = None, frame = None):
+        self.sigint_received = True
+        if self.interrupt_allowed == True:
+            sys.exit(0)
+
+sig = sigHandler()
+signal.signal(signal.SIGINT, sig.interrupt)
 
 argmax = lambda array: max(izip(array, xrange(len(array))))[1]
 argmin = lambda array: min(izip(array, xrange(len(array))))[1]
@@ -37,529 +60,6 @@ adam = optimizers.adam(clipnorm=1.)
 nadam = optimizers.Nadam(clipnorm=1.)
 rmsprop = optimizers.RMSprop(clipnorm=1.)
 optim_map = {'adam': adam, 'nadam': nadam, 'rmsprop': rmsprop}
-
-def inputSliceClosure(dim):
-    return lambda xx: xx[:, dim, :, :]
-
-def outputSliceClosure(dim):
-    return lambda xx: xx[:, dim, :]
-
-def mask_output(x, input, mask_value, reverseUtt):
-    if reverseUtt:
-        m = K.any(K.not_equal(K.reverse(input, (1,2)), mask_value), axis=-1, keepdims=True)
-    else:
-        m = K.any(K.not_equal(input, mask_value), axis=-1, keepdims=True)
-    x *= K.cast(m, 'float32')
-    x += 1 - K.cast(m, 'float32')
-    return x
-
-
-def masked_categorical_crossentropy(y_true, y_pred):
-    mask = K.cast(K.expand_dims(K.any(y_true, -1), axis=-1), 'float32')
-    y_pred *= mask
-    y_pred += 1-mask
-    y_pred += 1-mask
-    losses = K.categorical_crossentropy(y_pred, y_true)
-    losses *= K.squeeze(mask, -1)
-    ## Normalize by number of real segments, using a small non-zero denominator in cases of padding characters
-    ## in order to avoid division by zero
-    #losses /= (K.mean(mask) + (1e-10*(1-K.mean(mask))))
-    return losses
-
-def masked_mean_squared_error(y_true, y_pred):
-    y_pred = y_pred * K.cast(K.any(K.reverse(y_true, (1,2)), axis=-1, keepdims=True), 'float32')
-    return K.mean(K.square(y_pred - y_true), axis=-1)
-
-def masked_categorical_accuracy(y_true, y_pred):
-    mask = K.cast(K.expand_dims(K.greater(K.argmax(y_true, axis=-1), 0), axis=-1), 'float32')
-    accuracy = K.cast(K.equal(K.argmax(y_true, axis=-1), K.argmax(y_pred, axis=-1)), 'float32')
-    accuracy *= K.squeeze(mask, -1)
-    ## Normalize by number of real segments, using a small non-zero denominator in cases of padding characters
-    ## in order to avoid division by zero
-    #accuracy /= (K.mean(mask) + (1e-10*(1-K.mean(mask))))
-    return accuracy
-
-def wrdEmbdTargets(wrd_emb, Xae, batch_size, reverseUtt):
-    if reverseUtt:
-        get_embds = lambda: np.flip(wrd_emb.predict(Xae, batch_size=batch_size), 1)
-    else:
-        get_embds = lambda: wrd_emb.predict(Xae, batch_size=batch_size)
-    return get_embds()
-
-def updateAE(ae_phon, ae_utt, Xs, Xs_mask, segs, maxUtt, maxLen, batch_size, reverseUtt):
-    ## Train phonological AE
-    Xae_wrds, deletedChars_wrds, oneLetter_wrds = XsSeg2XaePhon(Xs,
-                                                      Xs_mask,
-                                                      segs,
-                                                      maxLen)
-
-    Yae_wrds = getYae(Xae_wrds, reverseUtt, utts=False)
-
-    ae_phon.fit(Xae_wrds,
-                Yae_wrds,
-                batch_size=batch_size,
-                epochs=1)
-
-    ## Train utterance AE
-    Xae_utts, deletedChars_utts, oneLetter_utts = XsSeg2Xae(Xs,
-                                                            Xs_mask,
-                                                            segs,
-                                                            maxUtt,
-                                                            maxLen)
-    Xae_emb = embed_words.predict(Xae_utts)
-    Yae_emb = getYae(Xae_emb, reverseUtt, utts=False)
-
-
-    ae_utt.fit(Xae_emb,
-               Yae_emb,
-               batch_size=batch_size,
-               epochs=1)
-
-    return Xae_utts, deletedChars_utts, oneLetter_utts
-
-def updateSegmenter(segmenter, Xs, Xs_mask, segs, seg_shift, batch_size):
-    charDim = Xs.shape[-1]
-    maxChar = Xs_mask.shape[-1]
-    seg_inputs = np.zeros((len(Xs), maxChar + seg_shift, charDim))
-    seg_inputs[:, :maxChar, :] = Xs
-    seg_mask = np.zeros((len(Xs_mask), maxChar + seg_shift))
-    seg_mask[:, seg_shift:] = Xs_mask
-    seg_mask = np.expand_dims(seg_mask, -1)
-    seg_targets = np.zeros((len(segs), maxChar + seg_shift, 1))
-    seg_targets[:, seg_shift:, :] = segs
-    segHist = segmenter.fit([seg_inputs, seg_mask],
-                            seg_targets,
-                            batch_size=batch_size,
-                            epochs=1)
-    return segHist
-
-def predictSegmenter(segmenter, Xs, Xs_mask, seg_shift, batch_size):
-    charDim = Xs.shape[-1]
-    maxChar = Xs_mask.shape[-1]
-    seg_inputs = np.zeros((len(Xs), maxChar + seg_shift, charDim))
-    seg_inputs[:, :maxChar, :] = Xs
-    seg_mask = np.zeros((len(Xs_mask), maxChar + seg_shift))
-    seg_mask[:, seg_shift:] = Xs_mask
-    seg_mask = np.expand_dims(seg_mask, -1)
-    return segmenter.predict([seg_inputs,seg_mask], batch_size=batch_size)[:, seg_shift:, :]
-
-def trainAEOnly(ae_full, ae_phon, ae_utt, embed_words, Xs, Xs_mask, segs, maxUtt, maxLen, trainIters, batch_size, reverseUtt, acoustic):
-    print('Training auto-encoder network')
-
-    return updateAE(ae_phon,
-                    ae_utt,
-                    Xs,
-                    Xs_mask,
-                    segs,
-                    maxUtt,
-                    maxLen,
-                    batch_size,
-                    reverseUtt)[0]
-
-def trainAEPhonOnly(ae, Xs, Xs_mask, segs, maxLen, trainIters, batch_size, reverseUtt):
-    print('Training phonological auto-encoder network')
-
-    ## Preprocess input data
-    Xae, deletedChars, oneLetter = XsSeg2XaePhon(Xs,
-                                                 Xs_mask,
-                                                 segs,
-                                                 maxLen)
-
-    ## Randomly permute samples
-    p, p_inv = getRandomPermutation(len(Xae))
-    Xae = Xae[p]
-    if reverseUtt:
-        Yae = np.flip(Xae, 1)
-    else:
-        Yae = Xae
-
-    ae.fit(Xae,
-           Yae,
-           batch_size=batch_size,
-           epochs=trainIters)
-
-    return Xae[p_inv]
-
-
-
-def trainSegmenterOnly(segmenter, Xs, Xs_mask, Y, trainIters, batch_size, seg_shift):
-    print('Training segmenter network')
-
-    updateSegmenter(segmenter,
-                    Xs,
-                    Xs_mask,
-                    Y,
-                    seg_shift,
-                    batch_size)
-
-    print('Getting model predictions for evaluation')
-    preds = predictSegmenter(segmenter,
-                             Xs,
-                             Xs_mask,
-                             seg_shift,
-                             batch_size)
-
-    segsProposal = (preds > 0.5) * np.expand_dims(1-Xs_mask, -1)
-
-    return segsProposal
-
-
-def printSegAnalysis(model, Xs, Xs_mask, segs, maxUtt, maxLen, metric, batch_size, reverse_utt, acoustic):
-    Xae_found, deletedChars_found, oneLetter_found = XsSeg2Xae(Xs,
-                                                               Xs_mask,
-                                                               segs,
-                                                               maxUtt,
-                                                               maxLen,
-                                                               acoustic)
-
-    Yae_found = getYae(Xae_found, reverse_utt)
-
-    found_lossXutt = scoreXUtt(model,
-                               Xae_found,
-                               Yae_found,
-                               batch_size,
-                               reverse_utt,
-                               metric)
-
-    found_loss = found_lossXutt.sum()
-    found_nChar = Xae_found.any(-1).sum()
-
-    print('Total loss (sum of losses): %s' % found_loss)
-    print('Deleted characters in segmentation: %d' % deletedChars_found.sum())
-    print('Input characterrs in segmentation: %d' % found_nChar.sum())
-    print('Loss per character: %.4f' % (float(found_loss) / found_nChar))
-    print()
-
-def plotPredsSeg(utt_ids, segmenter, Xs, Xs_mask, Y, logdir, prefix, iteration, seg_shift, batch_size, debug=False):
-    ## Initialize plotting objects
-    fig = plt.figure()
-    fig.set_size_inches(10, 10)
-    ax_input = fig.add_subplot(311)
-    ax_targ = fig.add_subplot(312)
-    ax_pred = fig.add_subplot(313)
-
-    inputs_raw = Xs[utt_ids]
-    masks_raw = Xs_mask[utt_ids]
-    preds_raw = predictSegmenter(segmenter,
-                                 inputs_raw,
-                                 masks_raw,
-                                 seg_shift,
-                                 batch_size)
-
-    targs_raw = np.expand_dims(Y[utt_ids], -1)
-
-    for u in range(len(utt_ids)):
-        inputs = inputs_raw[u]
-        inputs = inputs[np.where(1-masks_raw[u])]
-        inputs = np.swapaxes(inputs, 0, 1)
-
-        targs = targs_raw[u]
-        targs = targs[np.where(1-masks_raw[u])]
-
-        preds = preds_raw[u]
-        preds = preds[np.where(1-masks_raw[u])]
-        preds = np.squeeze(preds)
-
-        ## Create and save plots
-        fig.patch.set_visible(False)
-        fig.suptitle('Utterance %d, Iteration %d' % (utt_ids[u], iteration))
-
-        ax_input.clear()
-        ax_input.axis('off')
-        ax_input.set_title('Input', loc='left')
-        hm_input = ax_input.pcolor(inputs, cmap=plt.cm.Blues)
-
-        ax_targ.clear()
-        ax_targ.axis('off')
-        ax_targ.set_title('Target', loc='left')
-        ax_targ.set_ylim([0,1])
-        ax_targ.margins(0)
-        hm_targ = ax_targ.bar(np.arange(len(targs)), targs)
-
-        ax_pred.clear()
-        ax_pred.axis('off')
-        ax_pred.set_title('Prediction', loc='left')
-        ax_pred.set_ylim([0,1])
-        ax_pred.margins(0)
-        hm_pred = ax_pred.bar(np.arange(len(preds)), preds)
-
-        fig.savefig(logdir + '/barchart_' + prefix + '_utt' + str(utt_ids[u]) + '.jpg')
-
-
-def plotPredsUtt(utt_ids, model, Xae, Yae, logdir, prefix, iteration, batch_size, debug=False):
-    ## Initialize plotting objects
-    fig = plt.figure()
-    fig.set_size_inches(10, 10)
-    ax_input = fig.add_subplot(411)
-    ax_targ = fig.add_subplot(412)
-    ax_mean = fig.add_subplot(413)
-    ax_pred = fig.add_subplot(414)
-    inputs_raw = Xae[utt_ids]
-    # preds_raw = model.predict(Xae[utt_ids], batch_size=batch_size)[0]
-    preds_raw = model.predict(Xae[utt_ids], batch_size=batch_size)
-    targs_raw = Yae[utt_ids]
-
-    mean = np.expand_dims(np.mean(Yae, axis=(0, 1, 2)), -1)
-
-    if debug:
-        print('='*50)
-        print('Segmentation details for 10 randomly-selected utterances')
-    for u in range(len(utt_ids)):
-        ## Remove word boundaries so reconstruction of entire utterance can be plotted
-        inputs = []
-        if debug:
-            print('-'*50)
-            print('Utterance %d' %(utt_ids[u]+1))
-            sys.stdout.write('Input word lengths:')
-        for w in range(len(inputs_raw[u])):
-            inputs_w = inputs_raw[u,w,...]
-            inputs_w = inputs_w[np.where(inputs_w.any(-1))]
-            if debug:
-                sys.stdout.write(' %d' %inputs_w.shape[0])
-            inputs.append(inputs_w)
-        inputs = np.concatenate(inputs)
-        if debug:
-            print('\nInput utt length: %d' %inputs.shape[0])
-            sys.stdout.write('Prediction word lengths:')
-        inputs = np.swapaxes(inputs, 0, 1)
-        targs = []
-        for w in range(len(targs_raw[u])):
-            targs_w = targs_raw[u, w, ...]
-            targs_w = targs_w[np.where(targs_w.any(-1))]
-            if debug:
-                sys.stdout.write(' %d' % targs_w.shape[0])
-            targs.append(targs_w)
-        targs = np.concatenate(targs)
-        if debug:
-            print('\nPrediction utt length: %d' % targs.shape[0])
-            sys.stdout.write('Target word lengths:')
-        targs = np.swapaxes(targs, 0, 1)
-        preds = []
-        for w in range(len(preds_raw[u])):
-            preds_w = preds_raw[u,w,...]
-            preds_w = preds_w[np.where(preds_w.any(-1))]
-            if debug:
-                sys.stdout.write(' %d' %preds_w.shape[0])
-            preds.append(preds_w)
-        preds = np.concatenate(preds)
-        if debug:
-            print('\nTarget utt length: %d' %preds.shape[0])
-        preds = np.swapaxes(preds, 0, 1)
-
-        ## Create and save plots
-        fig.patch.set_visible(False)
-        fig.suptitle('Utterance %d, Iteration %d' %(utt_ids[u], iteration))
-
-        ax_input.clear()
-        ax_input.axis('off')
-        ax_input.set_title('Input', loc='left')
-        hm_input = ax_input.pcolor(inputs, cmap=plt.cm.Blues)
-
-        ax_targ.clear()
-        ax_targ.axis('off')
-        ax_targ.set_title('Target', loc='left')
-        hm_targ = ax_targ.pcolor(targs, cmap=plt.cm.Blues)
-
-        ax_mean.clear()
-        ax_mean.axis('off')
-        ax_mean.set_title('Target mean', loc='left')
-        hm_mean = ax_mean.pcolor(mean, cmap=plt.cm.Blues)
-        
-        ax_pred.clear()
-        ax_pred.axis('off')
-        ax_pred.set_title('Prediction', loc='left')
-        hm_pred = ax_pred.pcolor(preds, cmap=plt.cm.Blues)
-
-        fig.savefig(logdir + '/heatmap_' + prefix + '_utt' + str(utt_ids[u]) + '.jpg')
-
-
-def plotPredsWrd(wrd_ids, model, Xae, Yae, logdir, prefix, iteration, batch_size, debug=False):
-    ## Initialize plotting objects
-    fig = plt.figure()
-    fig.set_size_inches(10, 10)
-    ax_input = fig.add_subplot(411)
-    ax_targ = fig.add_subplot(412)
-    ax_mean = fig.add_subplot(413)
-    ax_pred = fig.add_subplot(414)
-    inputs_raw = Xae[wrd_ids]
-    preds_raw = model.predict(Xae[wrd_ids], batch_size=batch_size)
-    targs_raw = Yae[wrd_ids]
-
-    mean = np.expand_dims(np.mean(Yae, axis=(0, 1)), -1)
-
-    if debug:
-        print('=' * 50)
-        print('Segmentation details for 10 randomly-selected utterances')
-    for w in range(len(wrd_ids)):
-        ## Remove word boundaries so reconstruction of entire utterance can be plotted
-        if debug:
-            print('-' * 50)
-            print('Utterance %d' % (utt_ids[u] + 1))
-            sys.stdout.write('Input word lengths:')
-        inputs = inputs_raw[w, ...]
-        inputs = inputs[np.where(inputs.any(-1))]
-        if debug:
-            sys.stdout.write(' %d' % inputs.shape[0])
-        if debug:
-            print('\nInput utt length: %d' % inputs.shape[0])
-            sys.stdout.write('Prediction word lengths:')
-        inputs = np.swapaxes(inputs, 0, 1)
-        targs = targs_raw[w, ...]
-        targs = targs[np.where(targs.any(-1))]
-        if debug:
-            sys.stdout.write(' %d' % targs.shape[0])
-        if debug:
-            print('\nPrediction utt length: %d' % targs.shape[0])
-            sys.stdout.write('Target word lengths:')
-        targs = np.swapaxes(targs, 0, 1)
-        preds = preds_raw[w, ...]
-        preds = preds[np.where(preds.any(-1))]
-        if debug:
-            sys.stdout.write(' %d' % preds.shape[0])
-        if debug:
-            print('\nTarget utt length: %d' % preds.shape[0])
-        preds = np.swapaxes(preds, 0, 1)
-
-        ## Create and save plots
-        fig.patch.set_visible(False)
-        fig.suptitle('Word %d, Iteration %d' % (wrd_ids[w], iteration))
-
-        ax_input.clear()
-        ax_input.axis('off')
-        ax_input.set_title('Input', loc='left')
-        hm_input = ax_input.pcolor(inputs, cmap=plt.cm.Blues)
-
-        ax_targ.clear()
-        ax_targ.axis('off')
-        ax_targ.set_title('Target', loc='left')
-        hm_targ = ax_targ.pcolor(targs, cmap=plt.cm.Blues)
-
-        ax_mean.clear()
-        ax_mean.axis('off')
-        ax_mean.set_title('Target mean', loc='left')
-        hm_mean = ax_mean.pcolor(mean, cmap=plt.cm.Blues)
-
-        ax_pred.clear()
-        ax_pred.axis('off')
-        ax_pred.set_title('Prediction', loc='left')
-        hm_pred = ax_pred.pcolor(preds, cmap=plt.cm.Blues)
-
-        fig.savefig(logdir + '/heatmap_' + prefix + '_wrd' + str(utt_ids[w]) + '.jpg')
-
-
-def runCheckpoint(Xs, Xs_mask, gold, otherParams, maxChar, maxLen, maxUtt, charDim, logdir, segShift, batchSize, reverseUtt, iteration, batch_num, acoustic=False, ae_full=None, segmenter=None, debug=False):
-    if acoustic:
-        intervals, GOLDWRD, GOLDPHN = otherParams
-    else:
-        ctable = otherParams
-    ae_net = ae_full != None
-    seg_net = segmenter != None
-    print()
-    print('Performing system evaluation')
-    print('Segmenting cross-validation set')
-    if seg_net:
-        preds = predictSegmenter(segmenter,
-                                 Xs_cv,
-                                 Xs_mask_cv,
-                                 segShift,
-                                 batchSize)
-        segs4eval = (preds > 0.5).astype(np.int8)
-        if ACOUSTIC:
-            segs4eval[np.where(vad_cv)] = 1.
-        else:
-            segs4eval[:, 0, ...] = 1.
-        segs4eval[np.where(Xs_mask_cv)] = 0.
-    if ae_net:
-        Xae_cv, deletedChars_cv, oneLetter_cv = XsSeg2Xae(Xs_cv,
-                                                          Xs_mask_cv,
-                                                          segs4eval,
-                                                          maxUtt,
-                                                          maxLen,
-                                                          acoustic)
-        Yae_cv = getYae(Xae_cv, REVERSE_UTT)
-        print('Computing network losses on cross-validation set')
-        cvAELoss = lossXChar(ae_full, Xae_cv, Yae_cv, batchSize, acoustic, 'mse' if acoustic else 'xent')
-        segPreds = preds
-        cvSegLoss = -(
-        np.nan_to_num(np.log(segPreds)) * segs4eval + np.nan_to_num(np.log(1 - segPreds)) * (1 - segs4eval))
-        cvSegLoss *= np.expand_dims(1 - Xs_mask_cv, -1)
-        cvSegLoss = cvSegLoss.sum() / (1 - Xs_mask_cv).sum()
-        cvDel = deletedChars_cv.sum()
-        cvOneL = oneLetter_cv.sum()
-        cvSeg = segs4eval.sum()
-
-        if not acoustic:
-            print('')
-            print('Example reconstruction of learned segmentation')
-            printReconstruction(10, ae_full, Xae_cv, ctable, batchSize, reverseUtt)
-
-        segs4evalXDoc = dict.fromkeys(doc_list_cv)
-        for doc in segs4evalXDoc:
-            s, e = doc_indices_cv[doc]
-            segs4evalXDoc[doc] = segs4eval[s:e]
-            if acoustic:
-                masked_proposal = np.ma.array(segs4evalXDoc[doc], mask=Xs_mask_cv[s:e])
-                segs4evalXDoc[doc] = masked_proposal.compressed()
-
-        print('Scoring segmentation of cross-validation set')
-        segScore = writeLog(batch_num,
-                            iteration,
-                            cvAELoss if ae_net else None,
-                            None,
-                            cvSegLoss if seg_net else None,
-                            cvDel if ae_net else None,
-                            cvOneL if ae_net else None,
-                            cvSeg,
-                            gold,
-                            segs4evalXDoc,
-                            logdir,
-                            intervals if acoustic else None,
-                            acoustic,
-                            print_headers=not os.path.isfile(logdir + '/log.txt'))
-
-        print('Total frames:', raw_total)
-        if ae_net:
-            print('Auto-encoder loss:', epochAELoss)
-            print('Deletions:', epochDel)
-            print('One letter words:', epochOneL)
-        if SEG_NET:
-            print('Segmenter loss:', epochSegLoss)
-        print('Total segmentation points:', epochSeg)
-
-        if acoustic:
-            if GOLDWRD:
-                print('Word segmentation scores:')
-                printSegScores(segScore['wrd'], acoustic)
-            if GOLDPHN:
-                print('Phone segmentation scores:')
-                printSegScores(segScore['phn'], acoustic)
-            writeTimeSegs(frameSegs2timeSegs(intervals, segs4evalXDoc), out_dir=logdir, TextGrid=False)
-            writeTimeSegs(frameSegs2timeSegs(intervals, segs4evalXDoc), out_dir=logdir, TextGrid=True)
-        else:
-            printSegScores(getSegScores(gold, segs4evalXDoc, acoustic), acoustic)
-            writeSolutions(logdir, segs4evalXDoc[doc_list[0]], gold[doc_list[0]], batch_num)
-
-        plotPredsUtt(utt_ids_cv,
-                     ae_full,
-                     Xae_cv,
-                     Yae_cv,
-                     logdir,
-                     'train',
-                     iteration,
-                     batchSize,
-                     debug)
-
-        plotPredsSeg(utt_ids_cv,
-                     segmenter,
-                     Xs_cv,
-                     Xs_mask_cv,
-                     segs4eval,
-                     logdir,
-                     'train',
-                     iteration + 1,
-                     segShift,
-                     batchSize,
-                     debug)
 
 if __name__ == "__main__":
 
@@ -581,6 +81,7 @@ if __name__ == "__main__":
     parser.add_argument("--supervisedAEPhon", action='store_true')
     parser.add_argument("--reverseUtt", action='store_true')
     parser.add_argument("--debug", action='store_true')
+    parser.add_argument("--nResample")
     parser.add_argument("--crossValDir")
     parser.add_argument("--evalFreq")
     parser.add_argument("--algorithm")
@@ -609,6 +110,7 @@ if __name__ == "__main__":
     parser.add_argument("--interpolationRate")
     parser.add_argument("--logfile")
     parser.add_argument("--gpufrac")
+    parser.add_argument("--nViz")
     args = parser.parse_args()
     try:
         args.gpufrac = float(args.gpufrac)
@@ -693,8 +195,10 @@ if __name__ == "__main__":
     assert AE_NET or not ALGORITHM == 'viterbi', 'Viterbi sampling requires the AE network to be turned on.'
     OPTIM = args.optimizer if args.optimizer else checkpoint.get('optimizer', 'nadam' if ACOUSTIC else 'nadam')
     REVERSE_UTT = args.reverseUtt
+    N_RESAMPLE = checkpoint.get('nResample', int(args.nResample) if args.nResample else None if ACOUSTIC else None)
+    assert ACOUSTIC or not N_RESAMPLE, 'Resampling disallowed in character mode since it does not make any sense'
     crossValDir = args.crossValDir if args.crossValDir else checkpoint.get('crossValDir', None)
-    EVAL_FREQ = args.evalFreq if args.evalFreq else checkpoint.get('evalFreq', 50)
+    EVAL_FREQ = int(args.evalFreq) if args.evalFreq else checkpoint.get('evalFreq', 50)
     MASK_VALUE = 0 if ACOUSTIC else 1
     wordHidden = checkpoint.get('wordHidden', int(args.wordHidden) if args.wordHidden else 100 if ACOUSTIC else 80)
     uttHidden = checkpoint.get('uttHidden', int(args.uttHidden) if args.uttHidden else 500 if ACOUSTIC else 400)
@@ -705,7 +209,7 @@ if __name__ == "__main__":
     maxUtt = checkpoint.get('maxUtt', int(args.maxUtt) if args.maxUtt else 50 if ACOUSTIC else 10)
     maxLen = checkpoint.get('maxLen', int(args.maxLen) if args.maxLen else 100 if ACOUSTIC else 7)
     DEPTH = checkpoint.get('depth', int(args.depth) if args.depth != None else 1)
-    SEG_SHIFT = args.segShift if args.segShift != None else checkpoint.get('segShift', 0 if ACOUSTIC else 0)
+    SEG_SHIFT = int(args.segShift) if args.segShift != None else checkpoint.get('segShift', 0 if ACOUSTIC else 0)
     pretrainIters = int(args.pretrainIters) if args.pretrainIters else checkpoint.get('pretrainIters', 10 if ACOUSTIC else 10)
     trainNoSegIters = int(args.trainNoSegIters) if args.trainNoSegIters else checkpoint.get('trainNoSegIters', 10 if ACOUSTIC else 10)
     trainIters = int(args.trainIters) if args.trainIters else checkpoint.get('trainIters', 100 if ACOUSTIC else 80)
@@ -714,7 +218,7 @@ if __name__ == "__main__":
     ONE_LETTER_WT = float(args.oneLetterWt) if args.oneLetterWt else checkpoint.get('oneLetterWt', 50 if ACOUSTIC else 10)
     SEG_WT = float(args.segWt) if args.segWt else checkpoint.get('segWt', 0 if ACOUSTIC else 0)
     N_SAMPLES = int(args.nSamples) if args.nSamples else checkpoint.get('nSamples', 100 if ACOUSTIC else 100)
-    BATCH_SIZE = checkpoint.get('batchSize', int(args.batchSize) if args.batchSize else 128 if ACOUSTIC else 128)
+    BATCH_SIZE = int(args.batchSize) if args.batchSize else checkpoint.get('batchSize', 128 if ACOUSTIC else 128)
     SAMPLING_BATCH_SIZE = int(args.samplingBatchSize) if args.samplingBatchSize else checkpoint.get('samplingBatchSize', 128 if ACOUSTIC else 128)
     INITIAL_SEG_PROB = float(args.initialSegProb) if args.initialSegProb else checkpoint.get('initialSegProb', 0.2 if ACOUSTIC else 0.2)
     assert INITIAL_SEG_PROB >= 0 and INITIAL_SEG_PROB <= 1, 'Invalid value for initialSegProb (%.2f) -- must be between 0 and 1' %INITIAL_SEG_PROB
@@ -724,7 +228,7 @@ if __name__ == "__main__":
     pretrain = checkpoint.get('pretrain', True)
     DEBUG = args.debug
     RNN = recurrent.LSTM
-    VIZ_COUNT = 10
+    N_VIZ = checkpoint.get('nViz', int(args.nViz) if args.nViz != None else 10)
     if SEG_NET and not AE_NET:
         METRIC = 'logprobbinary'
 
@@ -745,6 +249,7 @@ if __name__ == "__main__":
     checkpoint['algorithm'] = ALGORITHM
     checkpoint['optimizer'] = OPTIM
     checkpoint['reverseUtt'] = REVERSE_UTT
+    checkpoint['nResample'] = N_RESAMPLE
     checkpoint['crossValDir'] = crossValDir
     checkpoint['evalFreq'] = EVAL_FREQ
     checkpoint['wordHidden'] = wordHidden
@@ -772,6 +277,7 @@ if __name__ == "__main__":
     checkpoint['iteration'] = iteration
     checkpoint['pretrain'] = pretrain
     checkpoint['evalFreq'] = EVAL_FREQ
+    checkpoint['nViz'] = N_VIZ
 
 
 
@@ -785,6 +291,7 @@ if __name__ == "__main__":
     ##################################################################################
     ##################################################################################
 
+    print()
     print('Pre-processing training data')
     doc_indices, doc_list, charDim, raw_total, Xs, Xs_mask, gold, other = processInputDir(dataDir, checkpoint, maxChar, ACOUSTIC)
     if ACOUSTIC:
@@ -802,11 +309,13 @@ if __name__ == "__main__":
         else:
             ctable_cv = other
 
-
-    ## Randomly pick utterance IDs for visualization
-    utt_ids = np.random.choice(len(Xs), size=VIZ_COUNT, replace=False)
-    if args.crossValDir:
-        utt_ids_cv = np.random.choice(len(Xs_cv), size=VIZ_COUNT, replace=False)
+    ## Randomly select utterances for visualization
+    utt_ids = checkpoint.get('uttIDs', np.random.choice(len(Xs), size=N_VIZ, replace=False))
+    if crossValDir:
+        utt_ids_cv = checkpoint.get('uttIDsCV', np.random.choice(len(Xs_cv), size=N_VIZ, replace=False))
+    checkpoint['uttIDs'] = utt_ids
+    if crossValDir:
+        checkpoint['uttIDsCV'] = utt_ids_cv
 
     ## pSegs: segmentation proposal distribution
     if ACOUSTIC:
@@ -841,8 +350,8 @@ if __name__ == "__main__":
     with open(logdir + '/params.txt', 'wb') as f:
         print('Model parameters:', file=f)
         if ACOUSTIC:
+            print('  Input type: Acoustic', file=f)
             print('  Training data location: %s' % dataDir, file=f)
-            print('  Training input type: Acoustic', file=f)
             if SEGFILE:
                 print('  Training initial segmentation file: %s' % SEGFILE, file=f)
             if GOLDWRD:
@@ -866,10 +375,11 @@ if __name__ == "__main__":
         print('  Unit testing auto-encoder network: %s' % args.supervisedAE, file=f)
         print('  Unit testing phonological auto-encoder network: %s' % args.supervisedAEPhon, file=f)
         print('  Reversing word order in reconstruction targets: %s' % REVERSE_UTT, file=f)
+        if N_RESAMPLE:
+            print('  Resampling discovered words to maximum word length: %s' % N_RESAMPLE, file=f)
         print('  Search algorithm: %s' % ALGORITHM, file=f)
         print('  Optimizer: %s' % OPTIM, file=f)
         print('  Autoencoder loss function: %s' % METRIC, file=f)
-        print('  Optimizer: %s' % OPTIM, file=f)
         print('  Word layer hidden units: %s' % wordHidden, file=f)
         print('  Utterance layer hidden units: %s' % uttHidden, file=f)
         print('  Segmenter network hidden units: %s' % segHidden, file=f)
@@ -893,6 +403,7 @@ if __name__ == "__main__":
         print('  Initial segmentation probability: %s' % INITIAL_SEG_PROB, file=f)
         print('  Rate of interpolation of segmenter distribution with uniform: %s' % INTERPOLATION_RATE, file=f)
         print('  Logging directory path: %s' % logdir, file=f)
+        print('  Number of examples to visualize: %s' % N_VIZ, file=f)
         print('  Maximum allocatable fraction of GPU: %s' % args.gpufrac, file=f)
         print('', file=f)
         print('Command line call to repro/resume:', file=f)
@@ -906,7 +417,8 @@ if __name__ == "__main__":
               '--supervisedAE' if args.supervisedAE else '',
               '--supervisedAEPhon' if args.supervisedAEPhon else '',
               '--reverseUtt' if REVERSE_UTT else '',
-              '--crossValDir %s' if crossValDir else '',
+              '--nResample %s' % N_RESAMPLE if N_RESAMPLE else '',
+              '--crossValDir %s' % crossValDir if crossValDir else '',
               '--evalFreq %s' % EVAL_FREQ,
               '--algorithm %s' % ALGORITHM,
               '--optimizer %s' % OPTIM,
@@ -933,6 +445,7 @@ if __name__ == "__main__":
               '--initialSegProb %s' % INITIAL_SEG_PROB,
               '--interpolationRate %s' % INTERPOLATION_RATE,
               '--logfile %s' % logdir[5:],
+              '--nViz %s' % N_VIZ,
               '--gpufrac %s' % args.gpufrac, file=f)
 
     print("Logging at", logdir)
@@ -955,12 +468,14 @@ if __name__ == "__main__":
         if AE_NET:
             ## AUTO-ENCODER NETWORK
 
+            wLen = N_RESAMPLE if N_RESAMPLE else maxLen
+
             ## INPUT
-            inp = Input(shape=(maxUtt, maxLen, charDim), name='AEfullInput')
+            inp = Input(shape=(maxUtt, wLen, charDim), name='AEfullInput')
 
             ## WORD ENCODER
             wordEncoder = Sequential(name='wordEncoder')
-            wordEncoder.add(Dropout(charDropout,input_shape=(maxLen, charDim), noise_shape=(1, maxLen, 1)))
+            wordEncoder.add(Dropout(charDropout,input_shape=(wLen, charDim), noise_shape=(1, wLen, 1)))
             #wordEncoder.add(Conv1D(wordHidden, 10))
             wordEncoder.add(RNN(wordHidden))
 
@@ -983,7 +498,7 @@ if __name__ == "__main__":
 
             ## WORD DECODER
             wordDecoder = Sequential(name='wordDecoder')
-            wordDecoder.add(RepeatVector(maxLen, input_shape=(wordHidden,)))
+            wordDecoder.add(RepeatVector(wLen, input_shape=(wordHidden,)))
             wordDecoder.add(RNN(wordHidden, return_sequences=True))
             wordDecoder.add(TimeDistributed(Dense(charDim)))
             wordDecoder.add(Activation('linear' if ACOUSTIC else 'softmax'))
@@ -1001,7 +516,7 @@ if __name__ == "__main__":
             wordsDecoded = Masking(mask_value=0, name='AEfull-mask')(mask)
 
             ## PHONOLOGICAL AE
-            inp_phon = Input(shape=(maxLen, charDim), name='AEphonInput')
+            inp_phon = Input(shape=(wLen, charDim), name='AEphonInput')
             wordDecoded = wordDecoder(wordEncoder(inp_phon))
             if REVERSE_UTT:
                 mask = Lambda(lambda x: x * K.cast(K.any(K.reverse(inp_phon, (1,2)), -1, keepdims=True), 'float32'),
@@ -1151,7 +666,8 @@ if __name__ == "__main__":
                                           maxLen,
                                           1,
                                           BATCH_SIZE,
-                                          REVERSE_UTT)
+                                          REVERSE_UTT,
+                                          N_RESAMPLE)
 
                     if REVERSE_UTT:
                         Yae = np.flip(Xae, 1)
@@ -1189,7 +705,7 @@ if __name__ == "__main__":
                                   1,
                                   BATCH_SIZE,
                                   REVERSE_UTT,
-                                  ACOUSTIC)
+                                  N_RESAMPLE)
 
                 plotPredsUtt(utt_ids,
                              ae_full,
@@ -1272,7 +788,7 @@ if __name__ == "__main__":
                                       1,
                                       BATCH_SIZE,
                                       REVERSE_UTT,
-                                      ACOUSTIC)
+                                      N_RESAMPLE)
 
                     plotPredsUtt(utt_ids,
                                  ae_full,
@@ -1340,7 +856,7 @@ if __name__ == "__main__":
                                       1,
                                       BATCH_SIZE,
                                       REVERSE_UTT,
-                                      ACOUSTIC)
+                                      N_RESAMPLE)
 
                     plotPredsUtt(utt_ids,
                                  ae_full,
@@ -1407,13 +923,15 @@ if __name__ == "__main__":
             ts0 = time.time()
             Xae, deletedChars, oneLetter = updateAE(ae_phon,
                                                     ae_utt,
+                                                    embed_words,
                                                     Xs,
                                                     Xs_mask,
                                                     segs,
                                                     maxUtt,
                                                     maxLen,
                                                     BATCH_SIZE,
-                                                    REVERSE_UTT)
+                                                    REVERSE_UTT,
+                                                    N_RESAMPLE)
             ts1 = time.time()
             print('Split time: %.2fs' %(ts1-ts0))
 
@@ -1455,7 +973,6 @@ if __name__ == "__main__":
                             BATCH_SIZE)
 
         if AE_NET:
-            print('Training auto-encoder network on random segmentation.')
             ae_full.fit(Xae,
                         Yae,
                         batch_size=BATCH_SIZE,
@@ -1564,11 +1081,15 @@ if __name__ == "__main__":
         if SEG_NET:
             epochSegLoss = checkpoint.get('epochSegLoss', 0)
         segsProposal = checkpoint.get('segsProposal', [])
+        segProbs = checkpoint.get('segProbs', [])
         epochSeg = checkpoint.get('epochSeg', 0)
         b =  checkpoint.get('b', 0)
 
         ## Randomly permute samples
-        p, p_inv = getRandomPermutation(len(Xs))
+        if b == 0:
+            p, p_inv = getRandomPermutation(len(Xs))
+        else:
+            p, p_inv = checkpoint.get('permute', getRandomPermutation(len(Xs)))
         Xs = Xs[p]
         Xs_mask = Xs_mask[p]
         pSegs = pSegs[p]
@@ -1595,7 +1116,7 @@ if __name__ == "__main__":
                                              SEG_SHIFT,
                                              BATCH_SIZE)
                     pSegs_batch = (1-INTERPOLATION_RATE) * preds + INTERPOLATION_RATE * .5 * np.ones_like(preds)
-                    pSegs_batch = pSegs_batch**2
+                    # pSegs_batch = pSegs_batch**2
                 else:
                     pSegs_batch = pSegs[b:b + SAMPLING_BATCH_SIZE]
                     pSegs_batch = (1-INTERPOLATION_RATE) * pSegs_batch + INTERPOLATION_RATE * .5 * np.ones_like(pSegs_batch)
@@ -1630,25 +1151,20 @@ if __name__ == "__main__":
                                                                                segs_batch,
                                                                                maxUtt,
                                                                                maxLen,
-                                                                               ACOUSTIC)
+                                                                               N_RESAMPLE)
 
                     Yae_batch = getYae(Xae_batch, REVERSE_UTT)
                     input_batch = Xae_batch
                     target_batch = Yae_batch
                     scorerNetwork = ae_full
-                else:
-                    input_batch = Xs_batch
-                    target_batch = segs_batch
-                    scorerNetwork = segmenter
 
-                scores_batch[:,s,:] = scoreXUtt(scorerNetwork,
-                                                input_batch,
-                                                target_batch,
-                                                BATCH_SIZE,
-                                                REVERSE_UTT,
-                                                metric = METRIC)
+                    scores_batch[:, s, :] = scoreXUtt(scorerNetwork,
+                                                      input_batch,
+                                                      target_batch,
+                                                      BATCH_SIZE,
+                                                      REVERSE_UTT,
+                                                      metric=METRIC)
 
-                if AE_NET:
                     penalties_batch[:,s,:] -= deletedChars_batch * DEL_WT
                     #print(deletedChars_batch)
                     #print(deletedChars_batch.shape)
@@ -1658,23 +1174,28 @@ if __name__ == "__main__":
                     #print(oneLetter_batch.shape)
                     #print(penalties_batch[:,s,:])
                     #raw_input()
-                if SEG_WT > 0:
-                    for u in range(len(segs_batch)):
-                        penalties_batch[u,s,-segs_batch[u].sum():] -= SEG_WT
+                    if SEG_WT > 0:
+                        for u in range(len(segs_batch)):
+                            penalties_batch[u, s, -segs_batch[u].sum():] -= SEG_WT
 
-            print('')
+            print()
 
-            print('Computing segmentation targets from samples')
-            segProbs_batch, segsProposal_batch, n_Seg_batch = guessSegTargets(scores_batch,
-                                                                              penalties_batch,
-                                                                              segSamples_batch,
-                                                                              pSegs_batch,
-                                                                              Xs_mask_batch,
-                                                                              ALGORITHM,
-                                                                              maxLen,
-                                                                              DEL_WT,
-                                                                              ONE_LETTER_WT,
-                                                                              SEG_WT)
+            if AE_NET:
+                print('Computing segmentation targets from samples')
+                segProbs_batch, segsProposal_batch, n_Seg_batch = guessSegTargets(scores_batch,
+                                                                                  penalties_batch,
+                                                                                  segSamples_batch,
+                                                                                  pSegs_batch,
+                                                                                  Xs_mask_batch,
+                                                                                  ALGORITHM,
+                                                                                  maxLen,
+                                                                                  DEL_WT,
+                                                                                  ONE_LETTER_WT,
+                                                                                  SEG_WT)
+            else:
+                segProbs_batch = np.expand_dims(segSamples_batch.sum(1) / segSamples_batch.shape[1], -1)
+                segsProposal_batch = np.expand_dims(segProbs_batch > 0.5, -1)
+                n_Seg_batch = segsProposal_batch.sum()
 
             st1 = time.time()
             print('Sampling time: %.2fs.' %(st1-st0))
@@ -1682,18 +1203,19 @@ if __name__ == "__main__":
             if AE_NET:
                 Xae_batch, deletedChars_batch, oneLetter_batch = updateAE(ae_phon,
                                                                           ae_utt,
+                                                                          embed_words,
                                                                           Xs_batch,
                                                                           Xs_mask_batch,
                                                                           segsProposal_batch,
                                                                           maxUtt,
                                                                           maxLen,
                                                                           BATCH_SIZE,
-                                                                          REVERSE_UTT)
+                                                                          REVERSE_UTT,
+                                                                          N_RESAMPLE)
 
                 Yae_batch = getYae(Xae_batch, REVERSE_UTT)
 
-                print('Fitting auto-encoder network')
-                #model.load_weights(logdir + '/model_init.h5', by_name=True)
+                print('Fitting full auto-encoder network')
                 aeHist = ae_full.fit(Xae_batch,
                                      Yae_batch,
                                      batch_size=BATCH_SIZE,
@@ -1703,18 +1225,10 @@ if __name__ == "__main__":
                 segHist = updateSegmenter(segmenter,
                                           Xs_batch,
                                           Xs_mask_batch,
-                                          segsProposal_batch,
+                                          segProbs_batch,
                                           SEG_SHIFT,
                                           BATCH_SIZE)
 
-                # print('Getting segmentation predictions from network')
-                # segsProposal_batch = (segmenter.predict(Xs_batch) > 0.5).astype(np.int8)
-                # if ACOUSTIC:
-                #     segsProposal_batch[np.where(vad_batch)] = 1.
-                # else:
-                #     segsProposal_batch[:,0,...] = 1.
-                # segsProposal_batch[np.where(Xs_mask_batch)] = 0.
-                # n_Seg_batch = segsProposal_batch.sum()
             else:
                 pSegs[b:b + SAMPLING_BATCH_SIZE] = segProbs_batch
 
@@ -1737,8 +1251,20 @@ if __name__ == "__main__":
             if SEG_NET:
                 epochSegLoss += segHist.history['loss'][-1]
 
+            # plotPredsSeg(range(N_VIZ),
+            #              segmenter,
+            #              Xs_batch,
+            #              Xs_mask_batch,
+            #              segProbs_batch,
+            #              logdir,
+            #              'debug',
+            #              (b + 1) / SAMPLING_BATCH_SIZE + 1,
+            #              SEG_SHIFT,
+            #              BATCH_SIZE,
+            #              DEBUG)
 
             segsProposal.append(segsProposal_batch)
+            segProbs.append(segProbs_batch)
             epochSeg += int(n_Seg_batch)
 
             b += SAMPLING_BATCH_SIZE
@@ -1749,6 +1275,7 @@ if __name__ == "__main__":
             if SEG_NET:
                 segmenter.save(logdir + '/segmenter.h5')
             with open(logdir + '/checkpoint.obj', 'wb') as f:
+                checkpoint['permute'] = (p, p_inv)
                 checkpoint['b'] = b
                 checkpoint['batch_num_global'] = batch_num_global
                 if AE_NET:
@@ -1761,33 +1288,38 @@ if __name__ == "__main__":
                     checkpoint['epochSegLoss'] = epochSegLoss
                 checkpoint['iteration'] = iteration
                 checkpoint['segsProposal'] = segsProposal
+                checkpoint['segProbs'] = segProbs
                 checkpoint['epochSeg'] = epochSeg
                 pickle.dump(checkpoint, f)
 
             ## Evaluate on cross-validation set
-            if args.crossValDir and (batch_num_global % EVAL_FREQ == 0):
+            sig.disallow_interrupt()
+            if crossValDir and (batch_num_global % EVAL_FREQ == 0):
                 if ACOUSTIC:
-                    otherParams = intervals_cv, GOLDWRD_CV, GOLDPHN_CV
+                    otherParams = intervals_cv, GOLDWRD_CV, GOLDPHN_CV, vad_cv
                 else:
                     otherParams = ctable_cv
-                runCheckpoint(Xs_cv,
-                              Xs_mask_cv,
-                              gold_cv,
-                              otherParams,
-                              maxChar,
-                              maxLen,
-                              maxUtt,
-                              charDim,
-                              logdir,
-                              SEG_SHIFT,
-                              BATCH_SIZE,
-                              REVERSE_UTT,
-                              iteration+1,
-                              batch_num_global,
-                              ACOUSTIC,
-                              ae_full,
-                              segmenter,
-                              DEBUG)
+                evalCrossVal(Xs_cv,
+                             Xs_mask_cv,
+                             gold_cv,
+                             doc_list_cv,
+                             doc_indices_cv,
+                             utt_ids_cv,
+                             otherParams,
+                             maxLen,
+                             maxUtt,
+                             raw_total_cv,
+                             logdir,
+                             SEG_SHIFT,
+                             BATCH_SIZE,
+                             REVERSE_UTT,
+                             iteration+1,
+                             batch_num_global,
+                             nResample = N_RESAMPLE,
+                             ae_full = ae_full if AE_NET else None,
+                             segmenter = segmenter if SEG_NET else None,
+                             debug = DEBUG)
+            sig.allow_interrupt()
 
             bt1 = time.time()
             print('Batch time: %.2fs' %(bt1-bt0))
@@ -1801,6 +1333,7 @@ if __name__ == "__main__":
         if SEG_NET:
             epochSegLoss /= N_BATCHES
         segsProposal = np.concatenate(segsProposal)
+        segProbs = np.concatenate(segProbs)
 
         ## Invert random permutation so evaluation aligns correctly
         Xs = Xs[p_inv]
@@ -1809,87 +1342,106 @@ if __name__ == "__main__":
             vad = vad[p_inv]
         pSegs = pSegs[p_inv]
         segsProposal = segsProposal[p_inv]
+        segProbs = segProbs[p_inv]
 
         iteration += 1
         b = 0
 
-        if crossValDir == None:
-            # Evaluate on training data
-            if AE_NET:
-                n = 10
-                Xae, _, _ = XsSeg2Xae(Xs,
-                                      Xs_mask,
-                                      segsProposal,
-                                      maxUtt,
-                                      maxLen,
-                                      ACOUSTIC)
+        # Evaluate on training data
+        if AE_NET:
+            n = 10
+            Xae, _, _ = XsSeg2Xae(Xs,
+                                  Xs_mask,
+                                  segsProposal,
+                                  maxUtt,
+                                  maxLen,
+                                  N_RESAMPLE)
 
-                plotPredsUtt(utt_ids,
-                             ae_full,
-                             Xae,
-                             getYae(Xae, REVERSE_UTT, ACOUSTIC),
-                             logdir,
-                             'train',
-                             iteration,
-                             BATCH_SIZE,
-                             DEBUG)
+            print('Plotting visualizations of auto-encoder output')
+            plotPredsUtt(utt_ids,
+                         ae_full,
+                         Xae,
+                         getYae(Xae, REVERSE_UTT, ACOUSTIC),
+                         logdir,
+                         'train',
+                         iteration,
+                         BATCH_SIZE,
+                         DEBUG)
 
-                if not ACOUSTIC:
-                    print('')
-                    print('Example reconstruction of learned segmentation')
-                    printReconstruction(10, ae_full, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
+            if not ACOUSTIC:
+                print('')
+                print('Example reconstruction of learned segmentation')
+                printReconstruction(10, ae_full, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
 
-            segsProposalXDoc = dict.fromkeys(doc_list)
-            for doc in segsProposalXDoc:
-                s,e = doc_indices[doc]
-                segsProposalXDoc[doc] = segsProposal[s:e]
-                if ACOUSTIC:
-                    masked_proposal = np.ma.array(segsProposalXDoc[doc], mask=Xs_mask[s:e])
-                    segsProposalXDoc[doc] = masked_proposal.compressed()
+        if SEG_NET:
+            print('Plotting visualizations of segmenter output')
+            plotPredsSeg(utt_ids,
+                         segmenter,
+                         Xs,
+                         Xs_mask,
+                         segProbs,
+                         logdir,
+                         'train',
+                         iteration,
+                         SEG_SHIFT,
+                         BATCH_SIZE,
+                         DEBUG)
 
-            segScore = writeLog(1,
-                                iteration,
-                                epochAELoss if AE_NET else None,
-                                epochAEAcc if (not ACOUSTIC and AE_NET) else None,
-                                epochSegLoss if SEG_NET else None,
-                                epochDel if AE_NET else None,
-                                epochOneL if AE_NET else None,
-                                epochSeg,
-                                gold,
-                                segsProposalXDoc,
-                                logdir,
-                                intervals if ACOUSTIC else None,
-                                ACOUSTIC,
-                                print_headers=not os.path.isfile(logdir + '/log.txt'))
-
-
-            print('Total frames:', raw_total)
-            if AE_NET:
-                print('Auto-encoder loss:', epochAELoss)
-                if not ACOUSTIC:
-                    print('Auto-encoder accuracy:', epochAEAcc)
-                print('Deletions:', epochDel)
-                print('One letter words:', epochOneL)
-            if SEG_NET:
-                print('Segmenter loss:', epochSegLoss)
-            print('Total segmentation points:', epochSeg)
-
+        segsProposalXDoc = dict.fromkeys(doc_list)
+        for doc in segsProposalXDoc:
+            s,e = doc_indices[doc]
+            segsProposalXDoc[doc] = segsProposal[s:e]
             if ACOUSTIC:
-                if GOLDWRD:
-                    segScores['wrd']['##overall##'][1] = precision_recall_f(*segScores['wrd']['##overall##'][0])
-                    segScores['wrd']['##overall##'][3] = precision_recall_f(*segScores['wrd']['##overall##'][2])
-                    print('Word segmentation scores:')
-                    printSegScores(segScore['wrd'], ACOUSTIC)
-                if GOLDPHN:
-                    segScores['phn']['##overall##'][1] = precision_recall_f(*segScores['phn']['##overall##'][0])
-                    segScores['phn']['##overall##'][3] = precision_recall_f(*segScores['phn']['##overall##'][2])
-                    print('Phone segmentation scores:')
-                    printSegScores(segScore['phn'], ACOUSTIC)
-                writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_dir=logdir, TextGrid=False)
-                writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_dir=logdir, TextGrid=True)
-            else:
-                printSegScores(getSegScores(gold, segsProposalXDoc, ACOUSTIC), ACOUSTIC)
-                writeSolutions(logdir, segsProposalXDoc[doc_list[0]], gold[doc_list[0]], iteration)
+                masked_proposal = np.ma.array(segsProposalXDoc[doc], mask=Xs_mask[s:e])
+                segsProposalXDoc[doc] = masked_proposal.compressed()
+
+        sig.disallow_interrupt()
+        segScore = writeLog(1,
+                            iteration,
+                            epochAELoss if AE_NET else None,
+                            epochAEAcc if (not ACOUSTIC and AE_NET) else None,
+                            epochSegLoss if SEG_NET else None,
+                            epochDel if AE_NET else None,
+                            epochOneL if AE_NET else None,
+                            epochSeg,
+                            gold,
+                            segsProposalXDoc,
+                            logdir,
+                            intervals = intervals if ACOUSTIC else None,
+                            acoustic = ACOUSTIC,
+                            print_headers= not os.path.isfile(logdir + '/log_train.txt'),
+                            filename= 'log_train.txt')
+        sig.allow_interrupt()
+
+
+        print('Total frames:', raw_total)
+        if AE_NET:
+            print('Auto-encoder loss:', epochAELoss)
+            if not ACOUSTIC:
+                print('Auto-encoder accuracy:', epochAEAcc)
+            print('Deletions:', epochDel)
+            print('One letter words:', epochOneL)
+        if SEG_NET:
+            print('Segmenter loss:', epochSegLoss)
+        print('Total segmentation points:', epochSeg)
+
+        sig.disallow_interrupt()
+        if ACOUSTIC:
+            if GOLDWRD:
+                segScores['wrd']['##overall##'][1] = precision_recall_f(*segScores['wrd']['##overall##'][0])
+                segScores['wrd']['##overall##'][3] = precision_recall_f(*segScores['wrd']['##overall##'][2])
+                print('Word segmentation scores:')
+                printSegScores(segScore['wrd'], ACOUSTIC)
+            if GOLDPHN:
+                segScores['phn']['##overall##'][1] = precision_recall_f(*segScores['phn']['##overall##'][0])
+                segScores['phn']['##overall##'][3] = precision_recall_f(*segScores['phn']['##overall##'][2])
+                print('Phone segmentation scores:')
+                printSegScores(segScore['phn'], ACOUSTIC)
+            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_dir=logdir, TextGrid=False, dataset='train')
+            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_dir=logdir, TextGrid=True, dataset='train')
+        else:
+            printSegScores(getSegScores(gold, segsProposalXDoc, ACOUSTIC), ACOUSTIC)
+            writeSolutions(logdir, segsProposalXDoc[doc_list[0]], gold[doc_list[0]], iteration, filename='seg_train.txt')
 
 
         if AE_NET:
@@ -1900,8 +1452,15 @@ if __name__ == "__main__":
             checkpoint['iteration'] = iteration
             checkpoint['batch_num_global'] = batch_num_global
             checkpoint['b'] = b
+            checkpoint['epochAELoss'] = 0
+            checkpoint['epochSegLoss'] = 0
+            checkpoint['epochDel'] = 0
+            checkpoint['epochOneL'] = 0
+            checkpoint['epochSeg'] = 0
             checkpoint['segsProposal'] = []
+            checkpoint['segProbs'] = []
             pickle.dump(checkpoint, f)
+        sig.allow_interrupt()
 
         it1 = time.time()
         print('Iteration time: %.2fs' %(it1-it0))
@@ -1951,7 +1510,7 @@ if __name__ == "__main__":
                                                                 goldsegXUtt,
                                                                 maxUtt,
                                                                 maxLen,
-                                                                ACOUSTIC)
+                                                                N_RESAMPLE)
 
         Yae_gold = getYae(Xae_gold, REVERSE_UTT)
 
@@ -1980,7 +1539,7 @@ if __name__ == "__main__":
                                                                     goldsegXUtt,
                                                                     maxUtt,
                                                                     maxLen,
-                                                                    ACOUSTIC)
+                                                                    N_RESAMPLE)
 
             Yae_gold = getYae(Xae_gold, REVERSE_UTT)
 
