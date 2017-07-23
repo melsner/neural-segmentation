@@ -33,7 +33,10 @@ def XsSeg2XaePhon(Xs, Xs_mask, segs, maxLen, nResample=None):
             deletedChars.append(max(0, len(utt[j]) - maxLen))
             oneLetter.append(int(w_len == 1))
             if nResample:
-                word = resample(utt[j][:w_len], nResample)
+                if w_len > 1:
+                    word = resample(utt[j][:w_len], nResample)
+                else:
+                    word = np.repeat(utt[j][:w_len], nResample, axis=0)
                 w_len = maxLen
             else:
                 word = utt[j][:w_len]
@@ -63,7 +66,10 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, nResample=None, check_output=Fa
             deletedChars[i,padwords+j] += max(0, len(utt[j]) - maxLen)
             oneLetter[i,padwords+j] += int(w_len == 1)
             if nResample:
-                word = resample(utt[j][:w_len], nResample)
+                if w_len > 1:
+                    word = resample(utt[j][:w_len], nResample)
+                else:
+                    word = np.repeat(utt[j][:w_len], nResample, axis=0)
                 w_len = maxLen
             else:
                 word = utt[j][:w_len]
@@ -113,10 +119,11 @@ def XsSegs2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, nResamp=None):
         oneLetter.append(oneLetter_doc)
     return np.concatenate(Xae), np.concatenate(deletedChars), np.concatenate(oneLetter)
 
-def getYae(Xae, reverseUtt, utts=True):
+def getYae(Xae, reverseUtt):
+    assert len(Xae.shape) in [3,4], 'Invalid number of dimensions for Xae: %i (must be 3 or 4)' % len(Xae.shape)
     if reverseUtt:
         Yae = np.flip(Xae, 1)
-        if utts:
+        if len(Xae.shape) == 4:
             Yae = np.flip(Yae, 2)
     else:
         Yae = Xae
@@ -267,25 +274,38 @@ def reconstructXs(Xs, ctable):
 
 def reconstructXae(Xae, ctable):
     reconstruction = []
-    Xae_charids = Xae.argmax(-1)
-    for i in range(len(Xae_charids)):
-        reconstruction.append([])
-        for j in range(len(Xae_charids[i])):
+    if len(Xae.shape) == 4:
+        for i in range(len(Xae)):
+            reconstruction.append([])
+            for j in range(len(Xae[i])):
+                word = ''
+                Xae_charids = Xae[i,j][np.where(Xae[i,j].any(-1))]
+                Xae_charids = Xae_charids.argmax(-1)
+                if len(Xae_charids) > 0:
+                    for k in range(len(Xae_charids)):
+                        word += ctable.indices_char[int(Xae_charids[k])]
+                    reconstruction[-1].append(word)
+            reconstruction[-1] = ' '.join(reconstruction[-1])
+    elif len(Xae.shape) == 3:
+        for j in range(len(Xae)):
             word = ''
-            for k in range(len(Xae_charids[i,j])):
-                word += ctable.indices_char[int(Xae_charids[i,j,k])]
-            reconstruction[-1].append(word)
-        reconstruction[-1] = ' '.join(reconstruction[-1])
+            Xae_charids = Xae[j][np.where(Xae[j].any(-1))]
+            Xae_charids = Xae_charids.argmax(-1)
+            if len(Xae_charids) > 0:
+                for k in range(len(Xae_charids)):
+                    word += ctable.indices_char[int(Xae_charids[k])]
+                reconstruction.append(word)
+    else:
+        raise ValueError('Xae must have shape 3 or 4 (got shape %i)' %Xae.shape)
     return reconstruction
 
-def printReconstruction(n, model, Xae, ctable, batch_size, reverseUtt):
+def printReconstruction(utt_ids, model, Xae, ctable, batch_size, reverseUtt):
     Yae = getYae(Xae, reverseUtt)
-    preds = model.predict(Xae[:n], batch_size=batch_size)
-    print('Sum of autoencoder predictions: %s' % preds.sum())
-    input_reconstruction = reconstructXae(Xae[:n], ctable)
-    target_reconstruction = reconstructXae(Yae[:n], ctable)
-    output_reconstruction = reconstructXae(preds[:n], ctable)
-    for utt in range(n):
+    preds = model.predict(Xae[utt_ids], batch_size=batch_size)
+    input_reconstruction = reconstructXae(Xae[utt_ids], ctable)
+    target_reconstruction = reconstructXae(Yae[utt_ids], ctable)
+    output_reconstruction = reconstructXae(preds[range(len(utt_ids))], ctable)
+    for utt in range(len(utt_ids)):
         print('Input:          %s' %input_reconstruction[utt])
         print('Target:         %s' %target_reconstruction[utt])
         print('Network:        %s' %output_reconstruction[utt])

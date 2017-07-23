@@ -1,6 +1,5 @@
 import sys, numpy as np
 from numpy import ma, inf, nan
-from data_handling import getYae
 
 def getRandomPermutation(n):
     p = np.random.permutation(np.arange(n))
@@ -256,9 +255,12 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
 
     return segsOut, finalscore
 
-def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen=inf, delWt=0, oneLetterWt=0, segWt=0, importanceSampledSegTargets = False, verbose=True):
+def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen=inf, delWt=0, oneLetterWt=0,
+                    segWt=0, annealer=None, importanceSampledSegTargets = False, verbose=True):
     augscores = scores + penalties
     eScores = augscores.sum(-1)
+    if annealer is not None:
+        eScores *= float(1)/annealer.step()
     MM = np.max(eScores, axis=1, keepdims=True)
     eScores = np.exp(eScores - MM)
     # approximately the probability of the sample given the data

@@ -22,26 +22,22 @@ def plotPredsSeg(utt_ids, segmenter, Xs, Xs_mask, Y, logdir, prefix, iteration, 
     targs_raw = np.expand_dims(Y[utt_ids], -1)
 
     for u in range(len(utt_ids)):
-        inputs = inputs_raw[u]
-        inputs = inputs[np.where(1 - masks_raw[u])]
-        inputs = np.swapaxes(inputs, 0, 1)
-
-        targs = targs_raw[u]
-        targs = targs[np.where(1 - masks_raw[u])]
-
-        preds = preds_raw[u]
-        preds = preds[np.where(1 - masks_raw[u])]
-        preds = np.squeeze(preds, -1)
-
-        ## Create and save plots
+        ## Set up plotting canvas
         fig.patch.set_visible(False)
         fig.suptitle('Utterance %d, Checkpoint %d' % (utt_ids[u], iteration))
 
+        ## Plot inputs (heatmap)
+        inputs = inputs_raw[u]
+        inputs = inputs[np.where(1 - masks_raw[u])]
+        inputs = np.swapaxes(inputs, 0, 1)
         ax_input.clear()
         ax_input.axis('off')
         ax_input.set_title('Input', loc='left')
         hm_input = ax_input.pcolor(inputs, cmap=plt.cm.Blues)
 
+        ## Plot targets (bar chart)
+        targs = targs_raw[u]
+        targs = targs[np.where(1 - masks_raw[u])]
         ax_targ.clear()
         ax_targ.axis('off')
         ax_targ.set_title('Target', loc='left')
@@ -49,6 +45,10 @@ def plotPredsSeg(utt_ids, segmenter, Xs, Xs_mask, Y, logdir, prefix, iteration, 
         ax_targ.margins(0)
         hm_targ = ax_targ.bar(np.arange(len(targs)), targs)
 
+        ## Plot predictions (bar chart)
+        preds = preds_raw[u]
+        preds = preds[np.where(1 - masks_raw[u])]
+        preds = np.squeeze(preds, -1)
         ax_pred.clear()
         ax_pred.axis('off')
         ax_pred.set_title('Prediction', loc='left')
@@ -56,170 +56,175 @@ def plotPredsSeg(utt_ids, segmenter, Xs, Xs_mask, Y, logdir, prefix, iteration, 
         ax_pred.margins(0)
         hm_pred = ax_pred.bar(np.arange(len(preds)), preds)
 
+        ## Save plot
         fig.savefig(logdir + '/barchart_' + prefix + '_utt' + str(utt_ids[u]) + '_iter' + str(iteration) + '.jpg')
 
     plt.close(fig)
 
 
-def plotPredsUtt(utt_ids, model, Xae, Yae, logdir, prefix, iteration, batch_size, debug=False):
+def plotPredsUtt(utt_ids, model, Xae, Yae, logdir, prefix, iteration, batch_size, Xae_resamp=None, debug=False):
     ## Initialize plotting objects
     fig = plt.figure()
     fig.set_size_inches(10, 10)
-    ax_input = fig.add_subplot(411)
-    ax_targ = fig.add_subplot(412)
-    ax_mean = fig.add_subplot(413)
-    ax_pred = fig.add_subplot(414)
-    inputs_raw = Xae[utt_ids]
-    # preds_raw = model.predict(Xae[utt_ids], batch_size=batch_size)[0]
-    preds_raw = model.predict(Xae[utt_ids], batch_size=batch_size)
+    inputs_src_raw = Xae[utt_ids]
+    if not Xae_resamp is None:
+        ax_input = fig.add_subplot(511)
+        ax_input_resamp = fig.add_subplot(512)
+        ax_targ = fig.add_subplot(513)
+        ax_mean = fig.add_subplot(514)
+        ax_pred = fig.add_subplot(515)
+        inputs_resamp_raw = Xae_resamp[utt_ids]
+        preds_raw = model.predict(inputs_resamp_raw, batch_size=batch_size)
+    else:
+        ax_input = fig.add_subplot(411)
+        ax_targ = fig.add_subplot(412)
+        ax_mean = fig.add_subplot(413)
+        ax_pred = fig.add_subplot(414)
+        inputs_src_raw = Xae[utt_ids]
+        preds_raw = model.predict(inputs_src_raw, batch_size=batch_size)
     targs_raw = Yae[utt_ids]
 
+    ## Plot target global mean
     mean = np.expand_dims(np.mean(Yae, axis=(0, 1, 2)), -1)
+    ax_mean.axis('off')
+    ax_mean.set_title('Target mean', loc='left')
+    hm_mean = ax_mean.pcolor(mean, cmap=plt.cm.Blues)
 
-    if debug:
-        print('=' * 50)
-        print('Segmentation details for 10 randomly-selected utterances')
     for u in range(len(utt_ids)):
-        ## Remove word boundaries so reconstruction of entire utterance can be plotted
-        inputs = []
-        if debug:
-            print('-' * 50)
-            print('Utterance %d' % (utt_ids[u] + 1))
-            sys.stdout.write('Input word lengths:')
-        for w in range(len(inputs_raw[u])):
-            inputs_w = inputs_raw[u, w, ...]
-            inputs_w = inputs_w[np.where(inputs_w.any(-1))]
-            if debug:
-                sys.stdout.write(' %d' % inputs_w.shape[0])
-            inputs.append(inputs_w)
-        inputs = np.concatenate(inputs)
-        if debug:
-            print('\nInput utt length: %d' % inputs.shape[0])
-            sys.stdout.write('Prediction word lengths:')
-        inputs = np.swapaxes(inputs, 0, 1)
+        ## Set up plotting canvas
+        fig.patch.set_visible(False)
+        fig.suptitle('Utterance %d, Checkpoint %d' % (utt_ids[u], iteration))
+
+        ## Plot source inputs
+        inputs_src = []
+        for w in range(len(inputs_src_raw[u])):
+            inputs_src_w = inputs_src_raw[u, w, ...]
+            inputs_src_w = inputs_src_w[np.where(inputs_src_w.any(-1))]
+            inputs_src.append(inputs_src_w)
+        inputs_src = np.concatenate(inputs_src)
+        inputs_src = np.swapaxes(inputs_src, 0, 1)
+        ax_input.clear()
+        ax_input.axis('off')
+        ax_input.set_title('Input (source)', loc='left')
+        hm_input = ax_input.pcolor(inputs_src, cmap=plt.cm.Blues)
+
+        ## Plot resampled inputs if applicable
+        if not Xae_resamp is None:
+            inputs_resamp = []
+            for w in range(len(inputs_src_raw[u])):
+                inputs_resamp_w = inputs_resamp_raw[u, w, ...]
+                inputs_resamp_w = inputs_resamp_w[np.where(inputs_resamp_w.any(-1))]
+                inputs_resamp.append(inputs_resamp_w)
+            inputs_resamp = np.concatenate(inputs_resamp)
+            inputs_resamp = np.swapaxes(inputs_resamp, 0, 1)
+            ax_input_resamp.clear()
+            ax_input_resamp.axis('off')
+            ax_input_resamp.set_title('Input (resampled)', loc='left')
+            hm_input = ax_input_resamp.pcolor(inputs_resamp, cmap=plt.cm.Blues)
+
+        ## Plot reconstruction targets
         targs = []
         for w in range(len(targs_raw[u])):
             targs_w = targs_raw[u, w, ...]
             targs_w = targs_w[np.where(targs_w.any(-1))]
-            if debug:
-                sys.stdout.write(' %d' % targs_w.shape[0])
             targs.append(targs_w)
         targs = np.concatenate(targs)
-        if debug:
-            print('\nPrediction utt length: %d' % targs.shape[0])
-            sys.stdout.write('Target word lengths:')
         targs = np.swapaxes(targs, 0, 1)
-        preds = []
-        for w in range(len(preds_raw[u])):
-            preds_w = preds_raw[u, w, ...]
-            preds_w = preds_w[np.where(preds_w.any(-1))]
-            if debug:
-                sys.stdout.write(' %d' % preds_w.shape[0])
-            preds.append(preds_w)
-        preds = np.concatenate(preds)
-        if debug:
-            print('\nTarget utt length: %d' % preds.shape[0])
-        preds = np.swapaxes(preds, 0, 1)
-
-        ## Create and save plots
-        fig.patch.set_visible(False)
-        fig.suptitle('Utterance %d, Checkpoint %d' % (utt_ids[u], iteration))
-
-        ax_input.clear()
-        ax_input.axis('off')
-        ax_input.set_title('Input', loc='left')
-        hm_input = ax_input.pcolor(inputs, cmap=plt.cm.Blues)
-
         ax_targ.clear()
         ax_targ.axis('off')
         ax_targ.set_title('Target', loc='left')
         hm_targ = ax_targ.pcolor(targs, cmap=plt.cm.Blues)
 
-        ax_mean.clear()
-        ax_mean.axis('off')
-        ax_mean.set_title('Target mean', loc='left')
-        hm_mean = ax_mean.pcolor(mean, cmap=plt.cm.Blues)
-
+        ## Plot predictions
+        preds = []
+        for w in range(len(preds_raw[u])):
+            preds_w = preds_raw[u, w, ...]
+            preds_w = preds_w[np.where(preds_w.any(-1))]
+            preds.append(preds_w)
+        preds = np.concatenate(preds)
+        preds = np.swapaxes(preds, 0, 1)
         ax_pred.clear()
         ax_pred.axis('off')
         ax_pred.set_title('Prediction', loc='left')
         hm_pred = ax_pred.pcolor(preds, cmap=plt.cm.Blues)
 
+        ## Save plot
         fig.savefig(logdir + '/heatmap_' + prefix + '_utt' + str(utt_ids[u]) + '_iter' + str(iteration) + '.jpg')
 
     plt.close(fig)
 
-def plotPredsWrd(wrd_ids, model, Xae, Yae, logdir, prefix, iteration, batch_size, debug=False):
+def plotPredsWrd(wrd_ids, model, Xae, Yae, logdir, prefix, iteration, batch_size, Xae_resamp=None, debug=False):
     ## Initialize plotting objects
     fig = plt.figure()
     fig.set_size_inches(10, 10)
-    ax_input = fig.add_subplot(411)
-    ax_targ = fig.add_subplot(412)
-    ax_mean = fig.add_subplot(413)
-    ax_pred = fig.add_subplot(414)
-    inputs_raw = Xae[wrd_ids]
-    preds_raw = model.predict(Xae[wrd_ids], batch_size=batch_size)
+    inputs_src_raw = Xae[wrd_ids]
+    if not Xae_resamp is None:
+        ax_input_resamp = fig.add_subplot(512)
+        ax_targ = fig.add_subplot(513)
+        ax_mean = fig.add_subplot(514)
+        ax_pred = fig.add_subplot(515)
+        inputs_resamp_raw = Xae_resamp[wrd_ids]
+        preds_raw = model.predict(inputs_resamp_raw, batch_size=batch_size)
+    else:
+        ax_input = fig.add_subplot(411)
+        ax_targ = fig.add_subplot(412)
+        ax_mean = fig.add_subplot(413)
+        ax_pred = fig.add_subplot(414)
+        preds_raw = model.predict(inputs_src_raw, batch_size=batch_size)
     targs_raw = Yae[wrd_ids]
 
+    ## Plot target global mean
     mean = np.expand_dims(np.mean(Yae, axis=(0, 1)), -1)
+    ax_mean.axis('off')
+    ax_mean.set_title('Target global mean', loc='left')
+    hm_mean = ax_mean.pcolor(mean, cmap=plt.cm.Blues)
 
     if debug:
         print('=' * 50)
         print('Segmentation details for 10 randomly-selected utterances')
     for w in range(len(wrd_ids)):
-        ## Remove word boundaries so reconstruction of entire utterance can be plotted
-        if debug:
-            print('-' * 50)
-            print('Word %d' % (wrd_ids[w] + 1))
-            sys.stdout.write('Input word lengths:')
-        inputs = inputs_raw[w, ...]
-        inputs = inputs[np.where(inputs.any(-1))]
-        if debug:
-            sys.stdout.write(' %d' % inputs.shape[0])
-        if debug:
-            print('\nInput utt length: %d' % inputs.shape[0])
-            sys.stdout.write('Prediction word lengths:')
-        inputs = np.swapaxes(inputs, 0, 1)
-        targs = targs_raw[w, ...]
-        targs = targs[np.where(targs.any(-1))]
-        if debug:
-            sys.stdout.write(' %d' % targs.shape[0])
-        if debug:
-            print('\nPrediction utt length: %d' % targs.shape[0])
-            sys.stdout.write('Target word lengths:')
-        targs = np.swapaxes(targs, 0, 1)
-        preds = preds_raw[w, ...]
-        preds = preds[np.where(preds.any(-1))]
-        if debug:
-            sys.stdout.write(' %d' % preds.shape[0])
-        if debug:
-            print('\nTarget utt length: %d' % preds.shape[0])
-        preds = np.swapaxes(preds, 0, 1)
-
-        ## Create and save plots
+        ## Set up plotting canvas
         fig.patch.set_visible(False)
         fig.suptitle('Word %d, Checkpoint %d' % (wrd_ids[w], iteration))
 
+        ## Plot source inputs
+        inputs_src = inputs_src_raw[w, ...]
+        inputs_src = inputs_src[np.where(inputs_src.any(-1))]
+        inputs_src = np.swapaxes(inputs_src, 0, 1)
         ax_input.clear()
         ax_input.axis('off')
-        ax_input.set_title('Input', loc='left')
-        hm_input = ax_input.pcolor(inputs, cmap=plt.cm.Blues)
+        ax_input.set_title('Input (source)', loc='left')
+        hm_input = ax_input.pcolor(inputs_src, cmap=plt.cm.Blues)
 
+        ## Plot resampled inputs if applicable
+        if not Xae_resamp is None:
+            inputs_resamp = inputs_resamp_raw[w, ...]
+            inputs_resamp = inputs_resamp[np.where(inputs_resamp.any(-1))]
+            inputs_resamp = np.swapaxes(inputs_resamp, 0, 1)
+            ax_input_resamp.clear()
+            ax_input_resamp.axis('off')
+            ax_input_resamp.set_title('Input (resampled)', loc='left')
+            hm_input = ax_input_resamp.pcolor(inputs_resamp, cmap=plt.cm.Blues)
+
+        ## Plot reconstruction targets
+        targs = targs_raw[w, ...]
+        targs = targs[np.where(targs.any(-1))]
+        targs = np.swapaxes(targs, 0, 1)
         ax_targ.clear()
         ax_targ.axis('off')
         ax_targ.set_title('Target', loc='left')
         hm_targ = ax_targ.pcolor(targs, cmap=plt.cm.Blues)
 
-        ax_mean.clear()
-        ax_mean.axis('off')
-        ax_mean.set_title('Target mean', loc='left')
-        hm_mean = ax_mean.pcolor(mean, cmap=plt.cm.Blues)
-
+        ## Plot predictions
+        preds = preds_raw[w, ...]
+        preds = preds[np.where(preds.any(-1))]
+        preds = np.swapaxes(preds, 0, 1)
         ax_pred.clear()
         ax_pred.axis('off')
         ax_pred.set_title('Prediction', loc='left')
         hm_pred = ax_pred.pcolor(preds, cmap=plt.cm.Blues)
 
+        ## Save plot
         fig.savefig(logdir + '/heatmap_' + prefix + '_wrd' + str(wrd_ids[w]) + '_iter' + str(iteration) + '.jpg')
 
     plt.close(fig)
@@ -266,7 +271,7 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
         if not acoustic:
             print('')
             print('Example reconstruction of learned segmentation')
-            printReconstruction(10, ae_full, Xae, ctable, batchSize, reverseUtt)
+            printReconstruction(utt_ids, ae_full, Xae, ctable, batchSize, reverseUtt)
 
     segs4evalXDoc = dict.fromkeys(doc_list)
     for doc in segs4evalXDoc:
@@ -307,24 +312,35 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
         if GOLDPHN:
             print('Phone segmentation scores:')
             printSegScores(segScore['phn'], acoustic)
+        print('Writing solutions to file')
         writeTimeSegs(frameSegs2timeSegs(intervals, segs4evalXDoc), out_dir=logdir, TextGrid=False, dataset='cv')
         writeTimeSegs(frameSegs2timeSegs(intervals, segs4evalXDoc), out_dir=logdir, TextGrid=True, dataset='cv')
     else:
+        print('Writing solutions to file')
         printSegScores(getSegScores(gold, segs4evalXDoc, acoustic), acoustic)
         writeSolutions(logdir, segs4evalXDoc[doc_list[0]], gold[doc_list[0]], batch_num, filename='seg_cv.txt')
 
     print()
     print('Plotting visualizations')
     if ae_net:
+        if nResample:
+            Xae_full, _, _ = XsSeg2Xae(Xs,
+                                       Xs_mask,
+                                       segs4eval,
+                                       maxUtt,
+                                       maxLen,
+                                       nResample=None)
+
         plotPredsUtt(utt_ids,
                      ae_full,
-                     Xae,
+                     Xae_full if nResample else Xae,
                      Yae,
                      logdir,
                      'cv',
                      batch_num,
                      batchSize,
-                     debug)
+                     Xae_resamp = Xae if nResample else None,
+                     debug=debug)
 
     plotPredsSeg(utt_ids,
                  segmenter,
@@ -336,4 +352,5 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
                  batch_num,
                  segShift,
                  batchSize,
-                 debug)
+
+                 debug=debug)

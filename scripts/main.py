@@ -31,8 +31,9 @@ from sampling import *
 from scoring import *
 from network import *
 from plotting import *
+from unit_testing import *
 
-class sigHandler(object):
+class SigHandler(object):
     def __init__(self):
         self.sigint_received = False
         self.interrupt_allowed = True
@@ -43,14 +44,31 @@ class sigHandler(object):
     def allow_interrupt(self):
         self.interrupt_allowed = True
         if self.sigint_received == True:
+            print()
             sys.exit(0)
 
     def interrupt(self, signum = None, frame = None):
         self.sigint_received = True
         if self.interrupt_allowed == True:
+            print()
             sys.exit(0)
 
-sig = sigHandler()
+class Annealer(object):
+    def __init__(self, t, r):
+        self.t = t
+        self.r = r
+
+    def temp(self):
+        return self.t
+
+    def cool(self, steps=1):
+        self.t = max(self.t - self.r*steps, 1)
+
+    def step(self):
+        return self.temp()
+        self.cool()
+
+sig = SigHandler()
 signal.signal(signal.SIGINT, sig.interrupt)
 
 argmax = lambda array: max(izip(array, xrange(len(array))))[1]
@@ -80,6 +98,8 @@ if __name__ == "__main__":
     parser.add_argument("--supervisedAE", action='store_true')
     parser.add_argument("--supervisedAEPhon", action='store_true')
     parser.add_argument("--reverseUtt", action='store_true')
+    parser.add_argument("--fitFull", action='store_true')
+    parser.add_argument("--fitFullOnly", action='store_true')
     parser.add_argument("--debug", action='store_true')
     parser.add_argument("--nResample")
     parser.add_argument("--crossValDir")
@@ -91,6 +111,9 @@ if __name__ == "__main__":
     parser.add_argument("--segHidden")
     parser.add_argument("--wordDropout")
     parser.add_argument("--charDropout")
+    parser.add_argument("--coolingFactor")
+    parser.add_argument("--annealTemp")
+    parser.add_argument("--annealRate")
     parser.add_argument("--depth")
     parser.add_argument("--segShift")
     parser.add_argument("--metric")
@@ -134,7 +157,6 @@ if __name__ == "__main__":
     usingGPU = is_gpu_available()
     print('Using GPU: %s' %usingGPU)
     K.set_session(sess)
-    K.set_learning_phase(1)
 
 
 
@@ -195,16 +217,21 @@ if __name__ == "__main__":
     assert AE_NET or not ALGORITHM == 'viterbi', 'Viterbi sampling requires the AE network to be turned on.'
     OPTIM = args.optimizer if args.optimizer else checkpoint.get('optimizer', 'nadam' if ACOUSTIC else 'nadam')
     REVERSE_UTT = args.reverseUtt
+    FIT_FULL = args.fitFull or args.fitFullOnly
+    FIT_PARTS = not args.fitFullOnly
     N_RESAMPLE = checkpoint.get('nResample', int(args.nResample) if args.nResample else None if ACOUSTIC else None)
     assert ACOUSTIC or not N_RESAMPLE, 'Resampling disallowed in character mode since it does not make any sense'
     crossValDir = args.crossValDir if args.crossValDir else checkpoint.get('crossValDir', None)
-    EVAL_FREQ = int(args.evalFreq) if args.evalFreq else checkpoint.get('evalFreq', 50)
+    EVAL_FREQ = int(args.evalFreq) if args.evalFreq else checkpoint.get('evalFreq', 10 if ACOUSTIC else 50)
     MASK_VALUE = 0 if ACOUSTIC else 1
     wordHidden = checkpoint.get('wordHidden', int(args.wordHidden) if args.wordHidden else 100 if ACOUSTIC else 80)
     uttHidden = checkpoint.get('uttHidden', int(args.uttHidden) if args.uttHidden else 500 if ACOUSTIC else 400)
     segHidden = checkpoint.get('segHidden', int(args.segHidden) if args.segHidden else 500 if ACOUSTIC else 100)
     wordDropout = checkpoint.get('wordDropout', float(args.wordDropout) if args.wordDropout else 0.25 if ACOUSTIC else 0.25)
     charDropout = checkpoint.get('charDropout', float(args.charDropout) if args.charDropout else 0.25 if ACOUSTIC else 0.5)
+    COOLING_FACTOR = int(args.coolingFactor) if args.coolingFactor != None else checkpoint.get('coolingFactor', 1 if ACOUSTIC else 1)
+    ANNEAL_TEMP = int(args.annealTemp) if args.annealTemp != None else checkpoint.get('annealTemp', 1 if ACOUSTIC else 1)
+    ANNEAL_RATE = int(args.annealRate) if args.annealRate != None else checkpoint.get('annealRate', 0 if ACOUSTIC else 0)
     maxChar = checkpoint.get('maxChar', int(args.maxChar) if args.maxChar else 500 if ACOUSTIC else 30)
     maxUtt = checkpoint.get('maxUtt', int(args.maxUtt) if args.maxUtt else 50 if ACOUSTIC else 10)
     maxLen = checkpoint.get('maxLen', int(args.maxLen) if args.maxLen else 100 if ACOUSTIC else 7)
@@ -232,7 +259,7 @@ if __name__ == "__main__":
     if SEG_NET and not AE_NET:
         METRIC = 'logprobbinary'
 
-
+    annealer = Annealer(ANNEAL_TEMP, ANNEAL_RATE)
 
 
     ##################################################################################
@@ -249,6 +276,8 @@ if __name__ == "__main__":
     checkpoint['algorithm'] = ALGORITHM
     checkpoint['optimizer'] = OPTIM
     checkpoint['reverseUtt'] = REVERSE_UTT
+    checkpoint['fitFull'] = FIT_FULL
+    checkpoint['fitParts'] = FIT_PARTS
     checkpoint['nResample'] = N_RESAMPLE
     checkpoint['crossValDir'] = crossValDir
     checkpoint['evalFreq'] = EVAL_FREQ
@@ -258,6 +287,9 @@ if __name__ == "__main__":
     checkpoint['wordDropout'] = wordDropout
     checkpoint['charDropout'] = charDropout
     checkpoint['maxChar'] = maxChar
+    checkpoint['coolingFactor'] = COOLING_FACTOR
+    checkpoint['annealTemp'] = ANNEAL_TEMP
+    checkpoint['annealRate'] = ANNEAL_RATE
     checkpoint['maxUtt'] = maxUtt
     checkpoint['maxLen'] = maxLen
     checkpoint['depth'] = DEPTH
@@ -375,6 +407,8 @@ if __name__ == "__main__":
         print('  Unit testing auto-encoder network: %s' % args.supervisedAE, file=f)
         print('  Unit testing phonological auto-encoder network: %s' % args.supervisedAEPhon, file=f)
         print('  Reversing word order in reconstruction targets: %s' % REVERSE_UTT, file=f)
+        print('  Fitting full auto-encoder end-to-end: %s' % FIT_FULL, file=f)
+        print('  Fitting phonological and utterance auto-encoders separately: %s' % FIT_PARTS, file=f)
         if N_RESAMPLE:
             print('  Resampling discovered words to maximum word length: %s' % N_RESAMPLE, file=f)
         print('  Search algorithm: %s' % ALGORITHM, file=f)
@@ -385,6 +419,9 @@ if __name__ == "__main__":
         print('  Segmenter network hidden units: %s' % segHidden, file=f)
         print('  Word dropout rate: %s' % wordDropout, file=f)
         print('  Character dropout rate: %s' % charDropout, file=f)
+        print('  Segmenter output cooling factor: %s' % COOLING_FACTOR, file=f)
+        print('  Loss annealing starting temperature: %s' % ANNEAL_TEMP, file=f)
+        print('  Loss annealing rate: %s' % ANNEAL_RATE, file=f)
         print('  RNN depth: %s' % DEPTH, file=f)
         print('  Segmenter target offset: %s' % SEG_SHIFT, file=f)
         print('  Loss metric: %s' % METRIC, file=f)
@@ -417,6 +454,8 @@ if __name__ == "__main__":
               '--supervisedAE' if args.supervisedAE else '',
               '--supervisedAEPhon' if args.supervisedAEPhon else '',
               '--reverseUtt' if REVERSE_UTT else '',
+              '--fitFull' if args.fitFull else '',
+              '--fitFullOnly' if args.fitFullOnly else '',
               '--nResample %s' % N_RESAMPLE if N_RESAMPLE else '',
               '--crossValDir %s' % crossValDir if crossValDir else '',
               '--evalFreq %s' % EVAL_FREQ,
@@ -427,6 +466,9 @@ if __name__ == "__main__":
               '--segHidden %s' % segHidden,
               '--wordDropout %s' % wordDropout,
               '--charDropout %s' % charDropout,
+              '--coolingFACTOR %s' % COOLING_FACTOR,
+              '--annealTemp %s' % ANNEAL_TEMP,
+              '--annealRate %s' % ANNEAL_RATE,
               '--depth %s' % DEPTH,
               '--segShift %s' % SEG_SHIFT,
               '--metric %s' % METRIC,
@@ -470,23 +512,27 @@ if __name__ == "__main__":
 
             wLen = N_RESAMPLE if N_RESAMPLE else maxLen
 
-            ## INPUT
-            inp = Input(shape=(maxUtt, wLen, charDim), name='AEfullInput')
+            ## INPUTS
+            fullInput = Input(shape=(maxUtt, wLen, charDim), name='AEfullInput')
+            phonInput = Input(shape=(wLen, charDim), name='AEphonInput')
+            uttInput = Input(shape=(maxUtt, wordHidden), name='AEuttInput')
+            uttMaskInput = Input(shape=(maxUtt,), name='AEuttMaskInput')
+            uttEmbd = Input(shape=(uttHidden,), name='UttEmbd')
+            wrdEmbd = Input(shape=(wordHidden,), name='WrdEmbd')
 
             ## WORD ENCODER
             wordEncoder = Sequential(name='wordEncoder')
-            wordEncoder.add(Dropout(charDropout,input_shape=(wLen, charDim), noise_shape=(1, wLen, 1)))
-            #wordEncoder.add(Conv1D(wordHidden, 10))
+            wordEncoder.add(Dropout(charDropout, input_shape=(wLen, charDim), noise_shape=(1, wLen, 1)))
             wordEncoder.add(RNN(wordHidden))
 
             ## WORDS ENCODER
-            wordsEncoded = TimeDistributed(wordEncoder, name='wordsEncoded')(inp)
-            wordsEncoded = TimeDistributed(Dropout(wordDropout, noise_shape=(1,)), name='wordDropout')(wordsEncoded)
+            wordsEncoder = Sequential(name='wordsEncoder')
+            wordsEncoder.add(TimeDistributed(wordEncoder, input_shape=(maxUtt, wLen, charDim)))
 
             ## UTTERANCE ENCODER
             uttEncoder = Sequential(name="uttEncoder")
-            uttEncoder.add(RNN(uttHidden, return_sequences=False, input_shape=(maxUtt, wordHidden)))
-            uttEncoded = uttEncoder(wordsEncoded)
+            uttEncoder.add(Dropout(wordDropout, noise_shape=(1,maxUtt,1), input_shape=(maxUtt, wordHidden)))
+            uttEncoder.add(RNN(uttHidden, return_sequences=False))
 
             ## UTTERANCE DECODER
             uttDecoder = Sequential(name='uttDecoder')
@@ -494,7 +540,6 @@ if __name__ == "__main__":
             uttDecoder.add(RNN(uttHidden, return_sequences=True))
             uttDecoder.add(TimeDistributed(Dense(wordHidden)))
             uttDecoder.add(Activation('linear'))
-            uttDecoded = uttDecoder(uttEncoded)
 
             ## WORD DECODER
             wordDecoder = Sequential(name='wordDecoder')
@@ -504,87 +549,55 @@ if __name__ == "__main__":
             wordDecoder.add(Activation('linear' if ACOUSTIC else 'softmax'))
 
             ## OUTPUT LAYER
-            wordsDecoded = TimeDistributed(wordDecoder, name='wordsDecoded')(uttDecoded)
+            wordsDecoder = Sequential(name='wordsDecoder')
+            wordsDecoder.add(TimeDistributed(wordDecoder, input_shape=(maxUtt, wordHidden)))
 
-            ## OUTPUT MASKIONG
-            if REVERSE_UTT:
-                mask = Lambda(lambda x: x * K.cast(K.any(K.reverse(inp, (1,2)), -1, keepdims=True), 'float32'),
-                              name='AEfull-output-premask')(wordsDecoded)
-            else:
-                mask = Lambda(lambda x: x * K.cast(K.any(inp, -1, keepdims=True), 'float32'),
-                              name='AEfull-output-premask')(wordsDecoded)
-            wordsDecoded = Masking(mask_value=0, name='AEfull-mask')(mask)
-
-            ## PHONOLOGICAL AE
-            inp_phon = Input(shape=(wLen, charDim), name='AEphonInput')
-            wordDecoded = wordDecoder(wordEncoder(inp_phon))
-            if REVERSE_UTT:
-                mask = Lambda(lambda x: x * K.cast(K.any(K.reverse(inp_phon, (1,2)), -1, keepdims=True), 'float32'),
-                              name='AEphon-output-premask')(wordDecoded)
-            else:
-                mask = Lambda(lambda x: x * K.cast(K.any(inp_phon, -1, keepdims=True), 'float32'),
-                              name='AEphon-output-premask')(wordDecoded)
-            wordDecoded = Masking(mask_value=0, name='AEphon-mask')(mask)
-            ae_phon = Model(input=inp_phon, output=wordDecoded)
-            if ACOUSTIC:
-                ae_phon.compile(loss="mean_squared_error",
-                                optimizer=optim_map[OPTIM])
-            else:
-                ae_phon.compile(loss=masked_categorical_crossentropy,
-                                optimizer=optim_map[OPTIM],
-                                metrics=[masked_categorical_accuracy])
+            ## Trainable models
+            ae_phon = wordDecoder(wordEncoder(phonInput))
+            m = (lambda x: x * K.cast(K.any(K.reverse(phonInput, (1, 2)), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
+                (lambda x: x * K.cast(K.any(phonInput, -1, keepdims=True), 'float32'))
+            ae_phon = Lambda(m, name='AEphon-output-premask')(ae_phon)
+            ae_phon = Masking(mask_value=0, name='AEphon-mask')(ae_phon)
+            ae_phon = Model(inputs=phonInput, outputs=ae_phon)
+            ae_phon.compile(loss="mean_squared_error" if ACOUSTIC else masked_categorical_crossentropy,
+                            metrics=None if ACOUSTIC else [masked_categorical_accuracy],
+                            optimizer=optim_map[OPTIM])
             print('Phonological auto-encoder network summary')
             ae_phon.summary()
             print()
 
-            ## UTTERANCE AE
-            inp_utt = Input(shape=(maxUtt, wordHidden), name='AEuttInput')
-            decoderUtt = uttEncoder(inp_utt)
-            decoderUtt = uttDecoder(decoderUtt)
-            ae_utt = Model(input=inp_utt, output=decoderUtt)
-            ae_utt.compile(loss="mean_squared_error",
-                           optimizer=optim_map[OPTIM])
+            ae_utt = uttDecoder(uttEncoder(uttInput))
+            ae_utt = Lambda(lambda x: x[0] * (K.cast(K.expand_dims(x[1], -1), 'float32')),
+                            name='AEutt-output-premask')([ae_utt, uttMaskInput])
+            ae_utt = Model(inputs=[uttInput, uttMaskInput], outputs=ae_utt)
+            ae_utt.compile(loss="mean_squared_error", optimizer=optim_map[OPTIM])
 
             print('Utterance auto-encoder network summary')
             ae_utt.summary()
             print()
 
-            ## WORD EMBEDDING MODEL
-            embed_word = Model(input=inp_phon, output=wordEncoder(inp_phon))
-            embed_word.compile(loss="mean_squared_error",
-                               optimizer=optim_map[OPTIM])
-            print('Word embedding network summary')
-            embed_word.summary()
-            print()
+            ae_full = wordsDecoder(uttDecoder(uttEncoder(wordsEncoder(fullInput))))
+            m = (lambda x: x * K.cast(K.any(K.reverse(fullInput, (1, 2)), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
+                (lambda x: x * K.cast(K.any(fullInput, -1, keepdims=True), 'float32'))
+            ae_full = Lambda(m, name='AEfull-output-premask')(ae_full)
+            ae_full = Masking(mask_value=0, name='AEfull-mask')(ae_full)
+            ae_full = Model(inputs=fullInput, outputs=ae_full)
+            ae_full.compile(loss="mean_squared_error" if ACOUSTIC else masked_categorical_crossentropy,
+                            metrics=None if ACOUSTIC else [masked_categorical_accuracy],
+                            optimizer=optim_map[OPTIM])
 
-            ## WORD EMBEDDINGS MODEL
-            embed_words = Model(input=inp, output=wordsEncoded)
-            embed_words.compile(loss="mean_squared_error",
-                                optimizer=optim_map[OPTIM])
-            print('Word embeddings network summary')
-            embed_words.summary()
-            print()
-
-            ## AE MODEL CREATION
-            # model = Model(input=inp, outputs=[wordsDecoder, utt2Words])
-            ae_full = Model(input=inp, output=wordsDecoded)
-
-            ## AE MODEL COMPILATION
-            if ACOUSTIC:
-                ae_full.compile(loss="mean_squared_error",
-                                optimizer=optim_map[OPTIM])
-            else:
-                # model.compile(loss=[masked_categorical_crossentropy, 'mean_squared_error'],
-                #               optimizer=optim_map[OPTIM],
-                #               metrics=[masked_categorical_accuracy, 'mean_squared_error'])
-                ae_full.compile(loss=masked_categorical_crossentropy,
-                                optimizer=optim_map[OPTIM],
-                                metrics=[masked_categorical_accuracy])
-
-            ## PRINT AE MODEL
-            print('Auto-encoder network summary')
+            print('Full auto-encoder network summary')
             ae_full.summary()
             print()
+
+            embed_word_func = K.function(inputs=[phonInput,K.learning_phase()], outputs=[wordEncoder(phonInput)])
+            embed_word = lambda input: embed_word_func(input)[0]
+
+            embed_words_func = K.function(inputs=[fullInput, K.learning_phase()], outputs=[wordsEncoder(fullInput)])
+            embed_words = lambda input: embed_words_func(input)[0]
+
+            embed_words_reconst_func = K.function(inputs=[fullInput, K.learning_phase()], outputs=[uttDecoder(uttEncoder(wordsEncoder(fullInput)))])
+            embed_words_reconst = lambda input: embed_words_reconst_func(input)[0]
 
             ## SAVE AE MODEL
             ae_full.save(logdir + '/model_init.h5')
@@ -644,253 +657,115 @@ if __name__ == "__main__":
         print('Network unit testing')
         segsProposalXDoc = dict.fromkeys(doc_list)
 
-        ## Phonological auto-encoder test
-        if not ACOUSTIC or GOLDWRD:
-            if ACOUSTIC:
-                _, goldseg = timeSegs2frameSegs(GOLDWRD)
-                Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
-            else:
-                goldseg = gold
-                Y = texts2Segs(gold, maxChar)
-            if args.supervisedAEPhon:
-                print('Unit testing phonological auto-encoder network on gold segmentation')
-                ## Re-initialize network weights in case any training has already happened
-                ae_full.load_weights(logdir + '/model_init.h5', by_name=True)
-
-                for i in range(trainIters):
-                    print('Iteration %d' % (i + 1))
-                    Xae = trainAEPhonOnly(ae_phon,
-                                          Xs,
-                                          Xs_mask,
-                                          Y,
-                                          maxLen,
-                                          1,
-                                          BATCH_SIZE,
-                                          REVERSE_UTT,
-                                          N_RESAMPLE)
-
-                    if REVERSE_UTT:
-                        Yae = np.flip(Xae, 1)
-                    else:
-                        Yae = Xae
-
-                    plotPredsWrd(utt_ids,
-                                 ae_phon,
-                                 Xae,
-                                 Yae,
-                                 logdir,
-                                 'rand',
-                                 i,
-                                 BATCH_SIZE,
-                                 DEBUG)
-
         ## Random segmentations
-        Y = sampleSeg(pSegs)
-        if args.supervisedAE:
-            print('Unit testing auto-encoder network on fixed random segmentation')
-            ## Re-initialize network weights in case any training has already happened
-            ae_full.load_weights(logdir + '/model_init.h5', by_name=True)
+        testUnits(Xs,
+                  Xs_mask,
+                  pSegs,
+                  maxChar,
+                  maxUtt,
+                  maxLen,
+                  BATCH_SIZE,
+                  REVERSE_UTT,
+                  N_RESAMPLE,
+                  SEG_SHIFT,
+                  trainIters,
+                  doc_indices,
+                  utt_ids,
+                  logdir,
+                  supervisedAE=args.supervisedAE,
+                  supervisedAEPhon=args.supervisedAEPhon,
+                  supervisedSegmenter=args.supervisedSegmenter,
+                  ae_full=ae_full if AE_NET else None,
+                  ae_phon=ae_phon if AE_NET else None,
+                  ae_utt=ae_utt if AE_NET else None,
+                  embed_words=embed_words if AE_NET else None,
+                  segmenter=segmenter if SEG_NET else None,
+                  vadBreaks=vadBreaks if ACOUSTIC else None,
+                  vad=vad if ACOUSTIC else None,
+                  intervals=intervals if ACOUSTIC else None,
+                  ctable=None if ACOUSTIC else ctable,
+                  goldEval=None if ACOUSTIC else gold,
+                  segLevel='rand',
+                  acoustic=ACOUSTIC,
+                  fitFull=FIT_FULL,
+                  fitParts=FIT_PARTS,
+                  debug=DEBUG)
 
-            for i in range(trainIters):
-                print('Iteration %d' % (i + 1))
-                Xae = trainAEOnly(ae_full,
-                                  ae_phon,
-                                  ae_utt,
-                                  embed_words,
-                                  Xs,
-                                  Xs_mask,
-                                  Y,
-                                  maxUtt,
-                                  maxLen,
-                                  1,
-                                  BATCH_SIZE,
-                                  REVERSE_UTT,
-                                  N_RESAMPLE)
-
-                plotPredsUtt(utt_ids,
-                             ae_full,
-                             Xae,
-                             getYae(Xae, REVERSE_UTT),
-                             logdir,
-                             'rand',
-                             i+1,
-                             BATCH_SIZE,
-                             DEBUG)
-
-                if not ACOUSTIC:
-                    printReconstruction(10, ae_full, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
-
-        if args.supervisedSegmenter:
-            print('Unit testing segmenter network on fixed random segmentation')
-            ## Re-initialize network weights in case any training has already happened
-            segmenter.load_weights(logdir + '/segmenter_init.h5', by_name=True)
-
-            segsProposal = trainSegmenterOnly(segmenter,
-                                              Xs,
-                                              Xs_mask,
-                                              Y,
-                                              trainIters,
-                                              BATCH_SIZE,
-                                              SEG_SHIFT)
-
+        ## Gold segmentations (phone if acoustic)
+        if not ACOUSTIC or GOLDPHN:
             if ACOUSTIC:
-                segsProposal[np.where(vad)] = 1.
-            else:
-                segsProposal[:, 0, ...] = 1.
-            for doc in segsProposalXDoc:
-                s, e = doc_indices[doc]
-                segsProposalXDoc[doc] = segsProposal[s:e]
-                if ACOUSTIC:
-                    masked_proposal = np.ma.array(segsProposalXDoc[doc], mask=Xs_mask[s:e])
-                    segsProposalXDoc[doc] = masked_proposal.compressed()
+                print('Using phone-level segmentations')
+            testUnits(Xs,
+                      Xs_mask,
+                      pSegs,
+                      maxChar,
+                      maxUtt,
+                      maxLen,
+                      BATCH_SIZE,
+                      REVERSE_UTT,
+                      N_RESAMPLE,
+                      SEG_SHIFT,
+                      trainIters,
+                      doc_indices,
+                      utt_ids,
+                      logdir,
+                      supervisedAE=args.supervisedAE,
+                      supervisedAEPhon=args.supervisedAEPhon,
+                      supervisedSegmenter=args.supervisedSegmenter,
+                      ae_full=ae_full if AE_NET else None,
+                      ae_phon=ae_phon if AE_NET else None,
+                      ae_utt=ae_utt if AE_NET else None,
+                      embed_words=embed_words if AE_NET else None,
+                      segmenter=segmenter if SEG_NET else None,
+                      vadBreaks=vadBreaks if ACOUSTIC else None,
+                      vad=vad if ACOUSTIC else None,
+                      intervals=intervals if ACOUSTIC else None,
+                      ctable=None if ACOUSTIC else ctable,
+                      gold=GOLDPHN if ACOUSTIC else gold,
+                      goldEval=gold['phn'] if ACOUSTIC else gold,
+                      segLevel='phn' if ACOUSTIC else 'gold',
+                      acoustic=ACOUSTIC,
+                      fitFull=FIT_FULL,
+                      fitParts=FIT_PARTS,
+                      debug=DEBUG)
 
-            randomTargetsXDoc = dict.fromkeys(doc_indices)
-
-            print('Scoring network predictions')
+        ## Gold word segmentations (if acoustic)
+        if ACOUSTIC and GOLDWRD:
             if ACOUSTIC:
-                for doc in randomTargetsXDoc:
-                    s, e = doc_indices[doc]
-                    masked_target = np.ma.array(Y[s:e], mask=Xs_mask[s:e])
-                    randomTargetsXDoc[doc] = masked_target.compressed()
-                scores = getSegScores(frameSegs2timeSegs(intervals, randomTargetsXDoc),
-                                      frameSegs2timeSegs(intervals, segsProposalXDoc), acoustic=ACOUSTIC)
-            else:
-                for doc in randomTargetsXDoc:
-                    s, e = doc_indices[doc]
-                    randomTargetsXDoc[doc] = charSeq2WrdSeq(Y[s:e], gold[doc])
-                scores = getSegScores(randomTargetsXDoc, segsProposalXDoc, acoustic=ACOUSTIC)
-
-            print('')
-            print('Random segmentation score')
-            printSegScores(scores, acoustic=ACOUSTIC)
-
-        ## Gold word segmentations
-        if not ACOUSTIC or GOLDWRD:
-            if ACOUSTIC:
-                _, goldseg = timeSegs2frameSegs(GOLDWRD)
-                Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
-            else:
-                goldseg = gold
-                Y = texts2Segs(gold, maxChar)
-            if args.supervisedAE:
-                print('Unit testing auto-encoder network on gold (word-level) segmentations')
-                ## Re-initialize network weights in case any training has already happened
-                ae_full.load_weights(logdir + '/model_init.h5', by_name=True)
-
-                for i in range(trainIters):
-                    print('Iteration %d' % (i + 1))
-                    Xae = trainAEOnly(ae_full,
-                                      Xs,
-                                      Xs_mask,
-                                      Y,
-                                      maxUtt,
-                                      maxLen,
-                                      1,
-                                      BATCH_SIZE,
-                                      REVERSE_UTT,
-                                      N_RESAMPLE)
-
-                    plotPredsUtt(utt_ids,
-                                 ae_full,
-                                 Xae,
-                                 getYae(Xae, REVERSE_UTT),
-                                 logdir,
-                                 'goldwrd',
-                                 i+1,
-                                 BATCH_SIZE,
-                                 DEBUG)
-
-                    if not ACOUSTIC:
-                        printReconstruction(10, ae_full, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
-
-
-            if args.supervisedSegmenter:
-                print('Unit testing segmenter network on gold (word-level) segmentations')
-                ## Re-initialize network weights in case any training has already happened
-                segmenter.load_weights(logdir + '/segmenter_init.h5', by_name=True)
-
-                segsProposal = trainSegmenterOnly(segmenter,
-                                                  Xs,
-                                                  Xs_mask,
-                                                  Y,
-                                                  trainIters,
-                                                  BATCH_SIZE,
-                                                  SEG_SHIFT)
-
-                if ACOUSTIC:
-                    segsProposal[np.where(vad)] = 1.
-                else:
-                    segsProposal[:,0,...] = 1.
-                for doc in segsProposalXDoc:
-                    s, e = doc_indices[doc]
-                    segsProposalXDoc[doc] = segsProposal[s:e]
-                    if ACOUSTIC:
-                        masked_proposal = np.ma.array(segsProposalXDoc[doc], mask=Xs_mask[s:e])
-                        segsProposalXDoc[doc] = masked_proposal.compressed()
-
-                print('Scoring segmentations')
-                if ACOUSTIC:
-                    scores = getSegScores(gold['wrd'], frameSegs2timeSegs(intervals, segsProposalXDoc), acoustic=ACOUSTIC)
-                else:
-                    scores = getSegScores(gold, segsProposalXDoc, acoustic=ACOUSTIC)
-                printSegScores(scores, acoustic=ACOUSTIC)
-
-        ## Gold phone segmentations
-        if ACOUSTIC and GOLDPHN:
-            _, goldseg = timeSegs2frameSegs(GOLDPHN)
-            Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
-
-            if args.supervisedAE:
-                print('Unit testing auto-encoder network on gold (phone-level) segmentations')
-                ## Re-initialize network weights in case any training has already happened
-                ae_full.load_weights(logdir + '/model_init.h5', by_name=True)
-
-                for i in range(trainIters):
-                    print('Iteration %d' % (i + 1))
-                    Xae = trainAEOnly(ae_full,
-                                      Xs,
-                                      Xs_mask,
-                                      Y,
-                                      maxUtt,
-                                      maxLen,
-                                      1,
-                                      BATCH_SIZE,
-                                      REVERSE_UTT,
-                                      N_RESAMPLE)
-
-                    plotPredsUtt(utt_ids,
-                                 ae_full,
-                                 Xae,
-                                 getYae(Xae, REVERSE_UTT),
-                                 logdir,
-                                 'goldphn',
-                                 i+1,
-                                 BATCH_SIZE,
-                                 DEBUG)
-
-            if args.supervisedSegmenter:
-                print('Unit testing segmenter network on gold (phone-level) segmentations')
-                ## Re-initialize network weights in case any training has already happened
-                segmenter.load_weights(logdir + '/segmenter_init.h5', by_name=True)
-
-                segsProposal = trainSegmenterOnly(segmenter,
-                                                  Xs,
-                                                  Xs_mask,
-                                                  Y,
-                                                  trainIters,
-                                                  BATCH_SIZE,
-                                                  SEG_SHIFT)
-
-                segsProposal[np.where(vad)] = 1.
-                for doc in segsProposalXDoc:
-                    s, e = doc_indices[doc]
-                    segsProposalXDoc[doc] = segsProposal[s:e]
-                    masked_proposal = np.ma.array(segsProposalXDoc[doc], mask=Xs_mask[s:e])
-                    segsProposalXDoc[doc] = masked_proposal.compressed()
-
-                print('Scoring segmentations')
-                scores = getSegScores(gold['phn'], frameSegs2timeSegs(intervals, segsProposalXDoc), acoustic=ACOUSTIC)
-                printSegScores(scores, acoustic=ACOUSTIC)
+                print('Using word-level segmentations')
+            testUnits(Xs,
+                      Xs_mask,
+                      pSegs,
+                      maxChar,
+                      maxUtt,
+                      maxLen,
+                      BATCH_SIZE,
+                      REVERSE_UTT,
+                      N_RESAMPLE,
+                      SEG_SHIFT,
+                      trainIters,
+                      doc_indices,
+                      utt_ids,
+                      logdir,
+                      supervisedAE=args.supervisedAE,
+                      supervisedAEPhon=args.supervisedAEPhon,
+                      supervisedSegmenter=args.supervisedSegmenter,
+                      ae_full=ae_full if AE_NET else None,
+                      ae_phon=ae_phon if AE_NET else None,
+                      ae_utt=ae_utt if AE_NET else None,
+                      embed_words=embed_words if AE_NET else None,
+                      segmenter=segmenter if SEG_NET else None,
+                      vadBreaks=vadBreaks if ACOUSTIC else None,
+                      vad=vad if ACOUSTIC else None,
+                      intervals=intervals if ACOUSTIC else None,
+                      ctable=None if ACOUSTIC else ctable,
+                      gold=GOLDWRD if ACOUSTIC else gold,
+                      goldEval=gold['wrd'] if ACOUSTIC else gold,
+                      segLevel='wrd',
+                      acoustic=ACOUSTIC,
+                      fitFull=FIT_FULL,
+                      fitParts=FIT_PARTS,
+                      debug=DEBUG)
 
         exit()
 
@@ -913,27 +788,26 @@ if __name__ == "__main__":
         print('Iteration', iteration + 1)
 
         segs = sampleSeg(pSegs)
-        t0 = time.time()
         ## Randomly permute samples
         p, p_inv = getRandomPermutation(len(Xs))
         Xs = Xs[p]
         Xs_mask = Xs_mask[p]
 
         if AE_NET:
-            ts0 = time.time()
-            Xae, deletedChars, oneLetter = updateAE(ae_phon,
-                                                    ae_utt,
-                                                    embed_words,
-                                                    Xs,
-                                                    Xs_mask,
-                                                    segs,
-                                                    maxUtt,
-                                                    maxLen,
-                                                    BATCH_SIZE,
-                                                    REVERSE_UTT,
-                                                    N_RESAMPLE)
-            ts1 = time.time()
-            print('Split time: %.2fs' %(ts1-ts0))
+            Xae, deletedChars, oneLetter, AEhist = updateAE(ae_full,
+                                                            ae_phon,
+                                                            ae_utt,
+                                                            embed_words,
+                                                            Xs,
+                                                            Xs_mask,
+                                                            segs,
+                                                            maxUtt,
+                                                            maxLen,
+                                                            BATCH_SIZE,
+                                                            REVERSE_UTT,
+                                                            nResample=N_RESAMPLE,
+                                                            fitParts=FIT_PARTS,
+                                                            fitFull=FIT_FULL)
 
             if DEBUG and not ACOUSTIC:
                 n = 5
@@ -949,9 +823,6 @@ if __name__ == "__main__":
                         print('Input tensor:        %s' % reconstructionXs[i])
                         print('Reconstruction:      %s' % reconstructionXae[i])
                         print()
-
-            t1 = time.time()
-            print('Auto-encoder input preprocessing completed in %.2fs.' %(t1-t0))
 
             Yae = getYae(Xae, REVERSE_UTT)
 
@@ -973,20 +844,24 @@ if __name__ == "__main__":
                             BATCH_SIZE)
 
         if AE_NET:
-            ae_full.fit(Xae,
-                        Yae,
-                        batch_size=BATCH_SIZE,
-                        epochs=1)
+            if N_RESAMPLE:
+                Xae_full, _, _ = XsSeg2Xae(Xs,
+                                           Xs_mask,
+                                           segs,
+                                           maxUtt,
+                                           maxLen,
+                                           nResample=None)
 
             plotPredsUtt(utt_ids,
                          ae_full,
-                         Xae,
-                         Yae,
+                         Xae_full if N_RESAMPLE else Xae,
+                         getYae(Xae, REVERSE_UTT),
                          logdir,
                          'pretrain',
                          iteration,
                          BATCH_SIZE,
-                         DEBUG)
+                         Xae_resamp = Xae if N_RESAMPLE else None,
+                         debug=DEBUG)
 
             # Correctness checks for NN masking
             if DEBUG:
@@ -997,13 +872,15 @@ if __name__ == "__main__":
                 print('Timesteps + deleted: %s (should be %s)' % (out.any(-1).sum() + int(deletedChars.sum()), sum([raw_cts[doc] for doc in raw_cts])))
                 print('')
 
-            if not ACOUSTIC:
-                preds = ae_full.predict(Xae[:10])
-                printReconstruction(10, ae_full, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
-
         ## Invert permutation
         Xs = Xs[p_inv]
         Xs_mask = Xs_mask[p_inv]
+
+        if AE_NET:
+            if not ACOUSTIC:
+                preds = ae_full.predict(Xae[:10])
+                printReconstruction(utt_ids, ae_full, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
+        print()
 
         iteration += 1
         if iteration == pretrainIters:
@@ -1019,7 +896,22 @@ if __name__ == "__main__":
             checkpoint['pretrain'] = pretrain
             pickle.dump(checkpoint, f)
 
+        # embeddedwords = embed_words([np.expand_dims(Xae[0], 0), 0])
+        # # embeddedwords *= np.expand_dims(np.expand_dims(Xae[0], 0).any(axis=(-2,-1)), -1)
+        # embeddedword = embed_word([Xae[0], 0])
+        # # embeddedword *= np.expand_dims(Xae[0].any(axis=(-2,-1)), -1)
+
+        # print(embeddedwords[...,0])
+        # print(embeddedwords.shape)
+        # print()
+        # print(embeddedword[...,0])
+        # print(embeddedword.shape)
+        # print()
+        # print(reconstructXae(np.expand_dims(Xae[0], 0), ctable))
+        # raw_input()
+
     ## Pretraining finished, update checkpoint
+    print('Saving restore point')
     with open(logdir + '/checkpoint.obj', 'wb') as f:
         checkpoint['pretrain'] = pretrain
         checkpoint['iteration'] = iteration
@@ -1054,6 +946,10 @@ if __name__ == "__main__":
     if iteration < trainIters:
         print('Starting training')
     while iteration < trainIters:
+
+        if iteration % 10 == 0:
+            print('Re-starting segmenter network')
+            segmenter.load_weights(logdir + '/segmenter_init.h5', by_name=True)
 
         it0 = time.time()
 
@@ -1116,7 +1012,7 @@ if __name__ == "__main__":
                                              SEG_SHIFT,
                                              BATCH_SIZE)
                     pSegs_batch = (1-INTERPOLATION_RATE) * preds + INTERPOLATION_RATE * .5 * np.ones_like(preds)
-                    # pSegs_batch = pSegs_batch**2
+                    pSegs_batch = pSegs_batch**COOLING_FACTOR
                 else:
                     pSegs_batch = pSegs[b:b + SAMPLING_BATCH_SIZE]
                     pSegs_batch = (1-INTERPOLATION_RATE) * pSegs_batch + INTERPOLATION_RATE * .5 * np.ones_like(pSegs_batch)
@@ -1187,11 +1083,12 @@ if __name__ == "__main__":
                                                                                   segSamples_batch,
                                                                                   pSegs_batch,
                                                                                   Xs_mask_batch,
-                                                                                  ALGORITHM,
-                                                                                  maxLen,
-                                                                                  DEL_WT,
-                                                                                  ONE_LETTER_WT,
-                                                                                  SEG_WT)
+                                                                                  algorithm=ALGORITHM,
+                                                                                  maxLen=maxLen,
+                                                                                  delWt=DEL_WT,
+                                                                                  oneLetterWt=ONE_LETTER_WT,
+                                                                                  segWt=SEG_WT,
+                                                                                  annealer=annealer)
             else:
                 segProbs_batch = np.expand_dims(segSamples_batch.sum(1) / segSamples_batch.shape[1], -1)
                 segsProposal_batch = np.expand_dims(segProbs_batch > 0.5, -1)
@@ -1201,25 +1098,22 @@ if __name__ == "__main__":
             print('Sampling time: %.2fs.' %(st1-st0))
 
             if AE_NET:
-                Xae_batch, deletedChars_batch, oneLetter_batch = updateAE(ae_phon,
-                                                                          ae_utt,
-                                                                          embed_words,
-                                                                          Xs_batch,
-                                                                          Xs_mask_batch,
-                                                                          segsProposal_batch,
-                                                                          maxUtt,
-                                                                          maxLen,
-                                                                          BATCH_SIZE,
-                                                                          REVERSE_UTT,
-                                                                          N_RESAMPLE)
+                Xae_batch, deletedChars_batch, oneLetter_batch, AEhist = updateAE(ae_full,
+                                                                                  ae_phon,
+                                                                                  ae_utt,
+                                                                                  embed_words,
+                                                                                  Xs_batch,
+                                                                                  Xs_mask_batch,
+                                                                                  segsProposal_batch,
+                                                                                  maxUtt,
+                                                                                  maxLen,
+                                                                                  BATCH_SIZE,
+                                                                                  REVERSE_UTT,
+                                                                                  nResample=N_RESAMPLE,
+                                                                                  fitFull=FIT_FULL)
 
                 Yae_batch = getYae(Xae_batch, REVERSE_UTT)
 
-                print('Fitting full auto-encoder network')
-                aeHist = ae_full.fit(Xae_batch,
-                                     Yae_batch,
-                                     batch_size=BATCH_SIZE,
-                                     epochs=1)
             if SEG_NET:
                 print('Fitting segmenter network')
                 segHist = updateSegmenter(segmenter,
@@ -1243,9 +1137,9 @@ if __name__ == "__main__":
             print('Mean segment length: %.2f' % (float(n_Char_batch) / n_Seg_batch))
 
             if AE_NET:
-                epochAELoss += aeHist.history['loss'][-1]
+                epochAELoss += AEhist[0]
                 if not ACOUSTIC:
-                    epochAEAcc += aeHist.history['masked_categorical_accuracy'][-1]
+                    epochAEAcc += AEhist[1]
                 epochDel += int(n_deletedChars_batch)
                 epochOneL += int(n_oneLetter_batch)
             if SEG_NET:
@@ -1270,6 +1164,7 @@ if __name__ == "__main__":
             b += SAMPLING_BATCH_SIZE
             batch_num_global += 1
 
+            print('Saving restore point')
             if AE_NET:
                 ae_full.save(logdir + '/model.h5')
             if SEG_NET:
@@ -1359,20 +1254,29 @@ if __name__ == "__main__":
                                   N_RESAMPLE)
 
             print('Plotting visualizations of auto-encoder output')
+            if N_RESAMPLE:
+                Xae_full, _, _ = XsSeg2Xae(Xs,
+                                           Xs_mask,
+                                           segsProposal,
+                                           maxUtt,
+                                           maxLen,
+                                           nResample=None)
+
             plotPredsUtt(utt_ids,
                          ae_full,
-                         Xae,
-                         getYae(Xae, REVERSE_UTT, ACOUSTIC),
+                         Xae_full if N_RESAMPLE else Xae,
+                         getYae(Xae, REVERSE_UTT),
                          logdir,
                          'train',
                          iteration,
                          BATCH_SIZE,
-                         DEBUG)
+                         Xae_resamp = Xae if N_RESAMPLE else None,
+                         debug=DEBUG)
 
             if not ACOUSTIC:
                 print('')
                 print('Example reconstruction of learned segmentation')
-                printReconstruction(10, ae_full, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
+                printReconstruction(utt_ids, ae_full, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
 
         if SEG_NET:
             print('Plotting visualizations of segmenter output')
@@ -1444,7 +1348,7 @@ if __name__ == "__main__":
             printSegScores(getSegScores(gold, segsProposalXDoc, ACOUSTIC), ACOUSTIC)
             writeSolutions(logdir, segsProposalXDoc[doc_list[0]], gold[doc_list[0]], iteration, filename='seg_train.txt')
 
-
+        print('Saving restore point')
         if AE_NET:
             ae_full.save(logdir + '/model.h5')
         if SEG_NET:
@@ -1454,6 +1358,8 @@ if __name__ == "__main__":
             checkpoint['batch_num_global'] = batch_num_global
             checkpoint['b'] = b
             checkpoint['epochAELoss'] = 0
+            if not ACOUSTIC:
+                checkpoint['epochAEAcc'] = 0
             checkpoint['epochSegLoss'] = 0
             checkpoint['epochDel'] = 0
             checkpoint['epochOneL'] = 0
