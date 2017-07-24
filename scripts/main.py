@@ -98,9 +98,8 @@ if __name__ == "__main__":
     parser.add_argument("--supervisedAE", action='store_true')
     parser.add_argument("--supervisedAEPhon", action='store_true')
     parser.add_argument("--reverseUtt", action='store_true')
-    parser.add_argument("--fitFull", action='store_true')
-    parser.add_argument("--fitFullOnly", action='store_true')
     parser.add_argument("--debug", action='store_true')
+    parser.add_argument("--fitType")
     parser.add_argument("--nResample")
     parser.add_argument("--crossValDir")
     parser.add_argument("--evalFreq")
@@ -217,8 +216,10 @@ if __name__ == "__main__":
     assert AE_NET or not ALGORITHM == 'viterbi', 'Viterbi sampling requires the AE network to be turned on.'
     OPTIM = args.optimizer if args.optimizer else checkpoint.get('optimizer', 'nadam' if ACOUSTIC else 'nadam')
     REVERSE_UTT = args.reverseUtt
-    FIT_FULL = args.fitFull or args.fitFullOnly
-    FIT_PARTS = not args.fitFullOnly
+    FIT_TYPE = args.fitType if args.fitType else checkpoint.get('fitType', 'both' if ACOUSTIC else 'both')
+    assert FIT_TYPE in ['parts', 'whole', 'both'], 'If --fitType is specified, must be one of "parts", "whole", or "both" (defaults to "both")'
+    FIT_FULL = FIT_TYPE in ['whole', 'both']
+    FIT_PARTS = FIT_TYPE in ['parts', 'both']
     N_RESAMPLE = checkpoint.get('nResample', int(args.nResample) if args.nResample else None if ACOUSTIC else None)
     assert ACOUSTIC or not N_RESAMPLE, 'Resampling disallowed in character mode since it does not make any sense'
     crossValDir = args.crossValDir if args.crossValDir else checkpoint.get('crossValDir', None)
@@ -229,9 +230,9 @@ if __name__ == "__main__":
     segHidden = checkpoint.get('segHidden', int(args.segHidden) if args.segHidden else 500 if ACOUSTIC else 100)
     wordDropout = checkpoint.get('wordDropout', float(args.wordDropout) if args.wordDropout else 0.25 if ACOUSTIC else 0.25)
     charDropout = checkpoint.get('charDropout', float(args.charDropout) if args.charDropout else 0.25 if ACOUSTIC else 0.5)
-    COOLING_FACTOR = int(args.coolingFactor) if args.coolingFactor != None else checkpoint.get('coolingFactor', 1 if ACOUSTIC else 1)
-    ANNEAL_TEMP = int(args.annealTemp) if args.annealTemp != None else checkpoint.get('annealTemp', 1 if ACOUSTIC else 1)
-    ANNEAL_RATE = int(args.annealRate) if args.annealRate != None else checkpoint.get('annealRate', 0 if ACOUSTIC else 0)
+    COOLING_FACTOR = float(args.coolingFactor) if args.coolingFactor != None else checkpoint.get('coolingFactor', 1 if ACOUSTIC else 1)
+    ANNEAL_TEMP = float(args.annealTemp) if args.annealTemp != None else checkpoint.get('annealTemp', 1 if ACOUSTIC else 1)
+    ANNEAL_RATE = float(args.annealRate) if args.annealRate != None else checkpoint.get('annealRate', 0 if ACOUSTIC else 0)
     maxChar = checkpoint.get('maxChar', int(args.maxChar) if args.maxChar else 500 if ACOUSTIC else 30)
     maxUtt = checkpoint.get('maxUtt', int(args.maxUtt) if args.maxUtt else 50 if ACOUSTIC else 10)
     maxLen = checkpoint.get('maxLen', int(args.maxLen) if args.maxLen else 100 if ACOUSTIC else 7)
@@ -276,8 +277,7 @@ if __name__ == "__main__":
     checkpoint['algorithm'] = ALGORITHM
     checkpoint['optimizer'] = OPTIM
     checkpoint['reverseUtt'] = REVERSE_UTT
-    checkpoint['fitFull'] = FIT_FULL
-    checkpoint['fitParts'] = FIT_PARTS
+    checkpoint['fitType'] = FIT_TYPE
     checkpoint['nResample'] = N_RESAMPLE
     checkpoint['crossValDir'] = crossValDir
     checkpoint['evalFreq'] = EVAL_FREQ
@@ -407,8 +407,7 @@ if __name__ == "__main__":
         print('  Unit testing auto-encoder network: %s' % args.supervisedAE, file=f)
         print('  Unit testing phonological auto-encoder network: %s' % args.supervisedAEPhon, file=f)
         print('  Reversing word order in reconstruction targets: %s' % REVERSE_UTT, file=f)
-        print('  Fitting full auto-encoder end-to-end: %s' % FIT_FULL, file=f)
-        print('  Fitting phonological and utterance auto-encoders separately: %s' % FIT_PARTS, file=f)
+        print('  Fitting type ("parts", "whole", or "both"): %s' % FIT_TYPE, file=f)
         if N_RESAMPLE:
             print('  Resampling discovered words to maximum word length: %s' % N_RESAMPLE, file=f)
         print('  Search algorithm: %s' % ALGORITHM, file=f)
@@ -454,8 +453,7 @@ if __name__ == "__main__":
               '--supervisedAE' if args.supervisedAE else '',
               '--supervisedAEPhon' if args.supervisedAEPhon else '',
               '--reverseUtt' if REVERSE_UTT else '',
-              '--fitFull' if args.fitFull else '',
-              '--fitFullOnly' if args.fitFullOnly else '',
+              '--fitType' if args.fitType else '',
               '--nResample %s' % N_RESAMPLE if N_RESAMPLE else '',
               '--crossValDir %s' % crossValDir if crossValDir else '',
               '--evalFreq %s' % EVAL_FREQ,
@@ -591,13 +589,14 @@ if __name__ == "__main__":
             print()
 
             embed_word_func = K.function(inputs=[phonInput,K.learning_phase()], outputs=[wordEncoder(phonInput)])
-            embed_word = lambda input: embed_word_func(input)[0]
+            embed_word = makeFunction(embed_word_func)
 
             embed_words_func = K.function(inputs=[fullInput, K.learning_phase()], outputs=[wordsEncoder(fullInput)])
-            embed_words = lambda input: embed_words_func(input)[0]
+            embed_words = makeFunction(embed_words_func)
 
             embed_words_reconst_func = K.function(inputs=[fullInput, K.learning_phase()], outputs=[uttDecoder(uttEncoder(wordsEncoder(fullInput)))])
-            embed_words_reconst = lambda input: embed_words_reconst_func(input)[0]
+            embed_words_reconst = makeFunction(embed_words_reconst_func)
+
 
             ## SAVE AE MODEL
             ae_full.save(logdir + '/model_init.h5')
@@ -787,6 +786,8 @@ if __name__ == "__main__":
         print('-' * 50)
         print('Iteration', iteration + 1)
 
+        t0 = time.time()
+
         segs = sampleSeg(pSegs)
         ## Randomly permute samples
         p, p_inv = getRandomPermutation(len(Xs))
@@ -880,7 +881,6 @@ if __name__ == "__main__":
             if not ACOUSTIC:
                 preds = ae_full.predict(Xae[:10])
                 printReconstruction(utt_ids, ae_full, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
-        print()
 
         iteration += 1
         if iteration == pretrainIters:
@@ -909,6 +909,10 @@ if __name__ == "__main__":
         # print()
         # print(reconstructXae(np.expand_dims(Xae[0], 0), ctable))
         # raw_input()
+
+        t1 = time.time()
+        print('Iteration time: %.2fs' %(t1-t0))
+        print()
 
     ## Pretraining finished, update checkpoint
     print('Saving restore point')
@@ -947,9 +951,9 @@ if __name__ == "__main__":
         print('Starting training')
     while iteration < trainIters:
 
-        if iteration % 10 == 0:
-            print('Re-starting segmenter network')
-            segmenter.load_weights(logdir + '/segmenter_init.h5', by_name=True)
+        # if iteration % 10 == 0:
+        #     print('Re-starting segmenter network')
+        #     segmenter.load_weights(logdir + '/segmenter_init.h5', by_name=True)
 
         it0 = time.time()
 
