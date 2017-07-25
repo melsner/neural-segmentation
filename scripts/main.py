@@ -464,7 +464,7 @@ if __name__ == "__main__":
               '--segHidden %s' % segHidden,
               '--wordDropout %s' % wordDropout,
               '--charDropout %s' % charDropout,
-              '--coolingFACTOR %s' % COOLING_FACTOR,
+              '--coolingFactor %s' % COOLING_FACTOR,
               '--annealTemp %s' % ANNEAL_TEMP,
               '--annealRate %s' % ANNEAL_RATE,
               '--depth %s' % DEPTH,
@@ -507,20 +507,17 @@ if __name__ == "__main__":
     if networkType == 'AESeg':
         if AE_NET:
             ## AUTO-ENCODER NETWORK
-
             wLen = N_RESAMPLE if N_RESAMPLE else maxLen
 
             ## INPUTS
             fullInput = Input(shape=(maxUtt, wLen, charDim), name='AEfullInput')
             phonInput = Input(shape=(wLen, charDim), name='AEphonInput')
             uttInput = Input(shape=(maxUtt, wordHidden), name='AEuttInput')
-            uttMaskInput = Input(shape=(maxUtt,), name='AEuttMaskInput')
-            uttEmbd = Input(shape=(uttHidden,), name='UttEmbd')
-            wrdEmbd = Input(shape=(wordHidden,), name='WrdEmbd')
 
             ## WORD ENCODER
             wordEncoder = Sequential(name='wordEncoder')
-            wordEncoder.add(Dropout(charDropout, input_shape=(wLen, charDim), noise_shape=(1, wLen, 1)))
+            wordEncoder.add(Masking(mask_value=0.0, input_shape=(wLen, charDim)))
+            wordEncoder.add(Dropout(charDropout, noise_shape=(1, wLen, 1)))
             wordEncoder.add(RNN(wordHidden))
 
             ## WORDS ENCODER
@@ -529,7 +526,8 @@ if __name__ == "__main__":
 
             ## UTTERANCE ENCODER
             uttEncoder = Sequential(name="uttEncoder")
-            uttEncoder.add(Dropout(wordDropout, noise_shape=(1,maxUtt,1), input_shape=(maxUtt, wordHidden)))
+            uttEncoder.add(Masking(mask_value=0.0, input_shape=(maxUtt, wordHidden)))
+            uttEncoder.add(Dropout(wordDropout, noise_shape=(1, maxUtt, 1)))
             uttEncoder.add(RNN(uttHidden, return_sequences=False))
 
             ## UTTERANCE DECODER
@@ -542,20 +540,45 @@ if __name__ == "__main__":
             ## WORD DECODER
             wordDecoder = Sequential(name='wordDecoder')
             wordDecoder.add(RepeatVector(wLen, input_shape=(wordHidden,)))
+            wordDecoder.add(Masking(mask_value=0))
             wordDecoder.add(RNN(wordHidden, return_sequences=True))
             wordDecoder.add(TimeDistributed(Dense(charDim)))
             wordDecoder.add(Activation('linear' if ACOUSTIC else 'softmax'))
 
-            ## OUTPUT LAYER
+            ## WORDS DECODER (OUTPUT LAYER)
             wordsDecoder = Sequential(name='wordsDecoder')
             wordsDecoder.add(TimeDistributed(wordDecoder, input_shape=(maxUtt, wordHidden)))
+            wordsDecoder.add(Masking(mask_value=0))
 
-            ## Trainable models
-            ae_phon = wordDecoder(wordEncoder(phonInput))
-            m = (lambda x: x * K.cast(K.any(K.reverse(phonInput, (1, 2)), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
-                (lambda x: x * K.cast(K.any(phonInput, -1, keepdims=True), 'float32'))
-            ae_phon = Lambda(m, name='AEphon-output-premask')(ae_phon)
-            ae_phon = Masking(mask_value=0, name='AEphon-mask')(ae_phon)
+            ## OUTPUT MASKS
+            m_phon2phon = (lambda x: x * K.cast(K.any(K.reverse(phonInput, 1), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
+                          (lambda x: x * K.cast(K.any(phonInput, -1, keepdims=True), 'float32'))
+            m_utt2utt =   (lambda x: x * K.cast(K.any(K.reverse(uttInput, 1), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
+                          (lambda x: x * K.cast(K.any(uttInput, -1, keepdims=True), 'float32'))
+            m_full2utt =  (lambda x: x * K.cast(K.any(K.any(K.reverse(fullInput, (1, 2)), -1), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
+                          (lambda x: x * K.cast(K.any(K.any(fullInput, -1), -1, keepdims=True), 'float32'))
+            m_full2full = (lambda x: x * K.cast(K.any(K.reverse(fullInput, (1, 2)), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
+                          (lambda x: x * K.cast(K.any(fullInput, -1, keepdims=True), 'float32'))
+
+            ## ENCODER-DECODER LAYERS
+            wordEncoderTensor = wordEncoder(phonInput)
+            wordsEncoderTensor = wordsEncoder(fullInput)
+
+            phonEncoderDecoder = wordDecoder(wordEncoderTensor)
+            phonEncoderDecoder = Lambda(m_phon2phon, name='AEphon-output-premask')(phonEncoderDecoder)
+
+            uttEncoderDecoder = Sequential(name='uttEncoderDecoder')
+            uttEncoderDecoder.add(uttEncoder)
+            uttEncoderDecoder.add(uttDecoder)
+
+            fullEncoderUttDecoder = uttEncoderDecoder(wordsEncoderTensor)
+            fullEncoderUttDecoder = Lambda(m_full2utt, name='fullEncoderUttDecoder')(fullEncoderUttDecoder)
+
+            fullEncoderDecoder = wordsDecoder(fullEncoderUttDecoder)
+            fullEncoderDecoder = Lambda(m_full2full, name='AEfull-output-premask')(fullEncoderDecoder)
+
+            ## COMPILED (TRAINABLE) MODELS
+            ae_phon = Masking(mask_value=0, name='AEphon-mask')(phonEncoderDecoder)
             ae_phon = Model(inputs=phonInput, outputs=ae_phon)
             ae_phon.compile(loss="mean_squared_error" if ACOUSTIC else masked_categorical_crossentropy,
                             metrics=None if ACOUSTIC else [masked_categorical_accuracy],
@@ -564,43 +587,35 @@ if __name__ == "__main__":
             ae_phon.summary()
             print()
 
-            ae_utt = uttDecoder(uttEncoder(uttInput))
-            ae_utt = Lambda(lambda x: x[0] * (K.cast(K.expand_dims(x[1], -1), 'float32')),
-                            name='AEutt-output-premask')([ae_utt, uttMaskInput])
-            ae_utt = Model(inputs=[uttInput, uttMaskInput], outputs=ae_utt)
+            ae_utt = Masking(mask_value=0, name='AEutt-mask')(Lambda(m_utt2utt)(uttEncoderDecoder(uttInput)))
+            ae_utt = Model(inputs=uttInput, outputs=ae_utt)
             ae_utt.compile(loss="mean_squared_error", optimizer=optim_map[OPTIM])
-
             print('Utterance auto-encoder network summary')
             ae_utt.summary()
             print()
 
-            ae_full = wordsDecoder(uttDecoder(uttEncoder(wordsEncoder(fullInput))))
-            m = (lambda x: x * K.cast(K.any(K.reverse(fullInput, (1, 2)), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
-                (lambda x: x * K.cast(K.any(fullInput, -1, keepdims=True), 'float32'))
-            ae_full = Lambda(m, name='AEfull-output-premask')(ae_full)
-            ae_full = Masking(mask_value=0, name='AEfull-mask')(ae_full)
+            ae_full = Masking(mask_value=0, name='AEfull-mask')(fullEncoderDecoder)
             ae_full = Model(inputs=fullInput, outputs=ae_full)
             ae_full.compile(loss="mean_squared_error" if ACOUSTIC else masked_categorical_crossentropy,
                             metrics=None if ACOUSTIC else [masked_categorical_accuracy],
                             optimizer=optim_map[OPTIM])
-
             print('Full auto-encoder network summary')
             ae_full.summary()
             print()
 
-            embed_word_func = K.function(inputs=[phonInput,K.learning_phase()], outputs=[wordEncoder(phonInput)])
-            embed_word = makeFunction(embed_word_func)
+            ## WORD EMBEDDINGS FEEDFORWARD
+            ## Must be custom Keras functions instead of models to allow predict with and without dropout
+            embed_word = K.function(inputs=[phonInput,K.learning_phase()], outputs=[wordEncoderTensor])
+            embed_word = makeFunction(embed_word)
 
-            embed_words_func = K.function(inputs=[fullInput, K.learning_phase()], outputs=[wordsEncoder(fullInput)])
-            embed_words = makeFunction(embed_words_func)
+            embed_words = K.function(inputs=[fullInput, K.learning_phase()], outputs=[wordsEncoderTensor])
+            embed_words = makeFunction(embed_words)
 
-            embed_words_reconst_func = K.function(inputs=[fullInput, K.learning_phase()], outputs=[uttDecoder(uttEncoder(wordsEncoder(fullInput)))])
-            embed_words_reconst = makeFunction(embed_words_reconst_func)
-
+            embed_words_reconst = K.function(inputs=[fullInput, K.learning_phase()], outputs=[fullEncoderUttDecoder])
+            embed_words_reconst = makeFunction(embed_words_reconst)
 
             ## SAVE AE MODEL
             ae_full.save(logdir + '/model_init.h5')
-
 
         if SEG_NET:
             ## SEGMENTER NETWORK
@@ -808,7 +823,9 @@ if __name__ == "__main__":
                                                             REVERSE_UTT,
                                                             nResample=N_RESAMPLE,
                                                             fitParts=FIT_PARTS,
-                                                            fitFull=FIT_FULL)
+                                                            fitFull=FIT_FULL,
+                                                            embed_word=embed_word,
+                                                            embed_words_reconst=embed_words_reconst)
 
             if DEBUG and not ACOUSTIC:
                 n = 5
@@ -844,6 +861,11 @@ if __name__ == "__main__":
                             SEG_SHIFT,
                             BATCH_SIZE)
 
+        ## Invert permutation
+        Xs = Xs[p_inv]
+        Xs_mask = Xs_mask[p_inv]
+        Xae = Xae[p_inv]
+
         if AE_NET:
             if N_RESAMPLE:
                 Xae_full, _, _ = XsSeg2Xae(Xs,
@@ -872,10 +894,6 @@ if __name__ == "__main__":
                 print('Deleted timesteps: %s' %int(deletedChars.sum()))
                 print('Timesteps + deleted: %s (should be %s)' % (out.any(-1).sum() + int(deletedChars.sum()), sum([raw_cts[doc] for doc in raw_cts])))
                 print('')
-
-        ## Invert permutation
-        Xs = Xs[p_inv]
-        Xs_mask = Xs_mask[p_inv]
 
         if AE_NET:
             if not ACOUSTIC:
@@ -1114,7 +1132,9 @@ if __name__ == "__main__":
                                                                                   BATCH_SIZE,
                                                                                   REVERSE_UTT,
                                                                                   nResample=N_RESAMPLE,
-                                                                                  fitFull=FIT_FULL)
+                                                                                  fitFull=FIT_FULL,
+                                                                                  embed_word=embed_word,
+                                                                                  embed_words_reconst=embed_words_reconst)
 
                 Yae_batch = getYae(Xae_batch, REVERSE_UTT)
 
