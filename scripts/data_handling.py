@@ -2,6 +2,7 @@ from __future__ import print_function, division
 import sys, re, numpy as np
 from scipy.signal import resample
 from echo_words import CharacterTable, pad
+from sampling import scoreXUtt
 
 ## GENERAL METHODS
 def segs2pSegs(segs, interpolationRate=0.1):
@@ -132,29 +133,29 @@ def getYae(Xae, reverseUtt):
 
 
 def printSegAnalysis(model, Xs, Xs_mask, segs, maxUtt, maxLen, metric, batch_size, reverse_utt, acoustic):
-    Xae_found, deletedChars_found, oneLetter_found = XsSeg2Xae(Xs,
-                                                               Xs_mask,
-                                                               segs,
-                                                               maxUtt,
-                                                               maxLen,
-                                                               acoustic)
+    Xae, deletedChars, oneLetter = XsSeg2Xae(Xs,
+                                             Xs_mask,
+                                             segs,
+                                             maxUtt,
+                                             maxLen,
+                                             acoustic)
 
-    Yae_found = getYae(Xae_found, reverse_utt)
+    Yae = getYae(Xae, reverse_utt)
 
-    found_lossXutt = scoreXUtt(model,
-                               Xae_found,
-                               Yae_found,
-                               batch_size,
-                               reverse_utt,
-                               metric)
+    eval = model.evaluate(Xae, Yae, batch_size=batch_size, verbose=0)
+    if type(eval) is not list:
+        eval = [eval]
 
-    found_loss = found_lossXutt.sum()
-    found_nChar = Xae_found.any(-1).sum()
+    found_loss = eval[0]
+    if not acoustic:
+        found_acc = eval[1]
+    found_nChar = Xae.any(-1).sum()
 
-    print('Total loss (sum of losses): %s' % found_loss)
-    print('Deleted characters in segmentation: %d' % deletedChars_found.sum())
+    print('Mean loss: %.4f' % found_loss)
+    if not acoustic:
+        print('Mean accuracy: %.4f' % found_acc)
+    print('Deleted characters in segmentation: %d' % deletedChars.sum())
     print('Input characterrs in segmentation: %d' % found_nChar.sum())
-    print('Loss per character: %.4f' % (float(found_loss) / found_nChar))
     print()
 
 

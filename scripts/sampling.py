@@ -1,5 +1,6 @@
 import sys, numpy as np
 from numpy import ma, inf, nan
+from scipy.signal import argrelmax
 
 def getRandomPermutation(n):
     p = np.random.permutation(np.arange(n))
@@ -16,6 +17,10 @@ def sampleSegs(pSegs):
     for doc in pSegs:
         segs[doc] = sampleSeg(pSegs[doc])
     return segs
+
+def pSegs2Segs(pSegs, acoustic=False):
+    if acoustic:
+        return
 
 def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=False):
     preds = model.predict(Xae, batch_size=batch_size)
@@ -260,6 +265,7 @@ def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viter
     augscores = scores + penalties
     eScores = augscores.sum(-1)
     if annealer is not None:
+        print('Score annealing temperature: %.4f' % annealer.temp())
         eScores *= float(1)/annealer.step()
     MM = np.max(eScores, axis=1, keepdims=True)
     eScores = np.exp(eScores - MM)

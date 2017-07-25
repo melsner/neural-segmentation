@@ -628,7 +628,7 @@ if __name__ == "__main__":
             segmenter.add(Activation("sigmoid"))
             segmenterPremask = Lambda(lambda x: x[0] * (1- K.cast(x[1], 'float32')), name='Seg-output-premask')([segmenter(segInput), segMaskInput])
             segmenter = Masking(mask_value=0.0, name='Seg-mask')(segmenterPremask)
-            segmenter = Model(inputs=[segInput, segMaskInput], output = segmenter)
+            segmenter = Model(inputs=[segInput, segMaskInput], outputs= segmenter)
             segmenter.compile(loss="binary_crossentropy",
                               optimizer=optim_map[OPTIM])
             print('Segmenter network summary')
@@ -1265,7 +1265,6 @@ if __name__ == "__main__":
         segProbs = segProbs[p_inv]
 
         iteration += 1
-        b = 0
 
         # Evaluate on training data
         if AE_NET:
@@ -1380,16 +1379,18 @@ if __name__ == "__main__":
         with open(logdir + '/checkpoint.obj', 'wb') as f:
             checkpoint['iteration'] = iteration
             checkpoint['batch_num_global'] = batch_num_global
-            checkpoint['b'] = b
-            checkpoint['epochAELoss'] = 0
-            if not ACOUSTIC:
-                checkpoint['epochAEAcc'] = 0
-            checkpoint['epochSegLoss'] = 0
-            checkpoint['epochDel'] = 0
-            checkpoint['epochOneL'] = 0
-            checkpoint['epochSeg'] = 0
-            checkpoint['segsProposal'] = []
-            checkpoint['segProbs'] = []
+            if iteration < trainIters:
+                ## Reset accumulators
+                checkpoint['b'] = 0
+                checkpoint['epochAELoss'] = 0
+                if not ACOUSTIC:
+                    checkpoint['epochAEAcc'] = 0
+                checkpoint['epochSegLoss'] = 0
+                checkpoint['epochDel'] = 0
+                checkpoint['epochOneL'] = 0
+                checkpoint['epochSeg'] = 0
+                checkpoint['segsProposal'] = []
+                checkpoint['segProbs'] = []
             pickle.dump(checkpoint, f)
         sig.allow_interrupt()
 
@@ -1410,9 +1411,11 @@ if __name__ == "__main__":
     ##################################################################################
     ##################################################################################
 
+
+    print('Comparing network losses on discovered vs. gold segmentations')
     if AE_NET:
 
-        print('Using discovered segmentation')
+        print('Discovered segmentation')
 
         printSegAnalysis(ae_full,
                          Xs,
@@ -1427,66 +1430,42 @@ if __name__ == "__main__":
 
         if ACOUSTIC:
             if GOLDWRD:
+                print('Gold word segmentations')
                 _, goldseg = timeSegs2frameSegs(GOLDWRD)
                 goldsegXUtt = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
             else:
+                print('Gold phone segmentations')
                 _, goldseg = timeSegs2frameSegs(GOLDPHN)
                 goldsegXUtt = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
         else:
+            print('Gold word segmentations')
             goldsegXUtt = texts2Segs(gold, maxChar)
 
+        printSegAnalysis(ae_full,
+                         Xs,
+                         Xs_mask,
+                         goldsegXUtt,
+                         maxUtt,
+                         maxLen,
+                         METRIC,
+                         BATCH_SIZE,
+                         REVERSE_UTT,
+                         ACOUSTIC)
 
-        Xae_gold, deletedChars_gold, oneLetter_gold = XsSeg2Xae(Xs,
-                                                                Xs_mask,
-                                                                goldsegXUtt,
-                                                                maxUtt,
-                                                                maxLen,
-                                                                N_RESAMPLE)
-
-        Yae_gold = getYae(Xae_gold, REVERSE_UTT)
-
-        gold_lossXutt = scoreXUtt(ae_full,
-                                  Xae_gold,
-                                  Yae_gold,
-                                  BATCH_SIZE,
-                                  REVERSE_UTT,
-                                  METRIC)
-
-        gold_loss = gold_lossXutt.sum()
-        gold_nChar = Xae_gold.any(-1).sum()
-
-        print('Sum of losses for each word using gold segmentation%s: %.4f' %(' (word-level)' if (ACOUSTIC and GOLDWRD) else ' (phone-level) ' if (ACOUSTIC and GOLDPHN) else '', gold_loss))
-        print('Deleted characters in segmentation: %d' % deletedChars_gold.sum())
-        print('Input characterrs in segmentation: %d' % gold_nChar.sum())
-        print('Loss per character: %.4f' %(float(gold_loss)/gold_nChar))
-        print()
 
         if ACOUSTIC and GOLDWRD and GOLDPHN:
+            print('Gold phone segmentations')
             _, goldseg = timeSegs2frameSegs(GOLDPHN)
             goldsegXUtt = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
 
-            Xae_gold, deletedChars_gold, oneLetter_gold = XsSeg2Xae(Xs,
-                                                                    Xs_mask,
-                                                                    goldsegXUtt,
-                                                                    maxUtt,
-                                                                    maxLen,
-                                                                    N_RESAMPLE)
-
-            Yae_gold = getYae(Xae_gold, REVERSE_UTT)
-
-            gold_lossXutt = scoreXUtt(ae_full,
-                                      Xae_gold,
-                                      Yae_gold,
-                                      BATCH_SIZE,
-                                      REVERSE_UTT,
-                                      METRIC)
-
-            gold_loss = gold_lossXutt.sum()
-            gold_nChar = Xae_gold.any(-1).sum()
-
-            print('Sum of losses for each word using gold segmentation (phone-level): %.4f' % gold_loss)
-            print('Deleted characters in segmentation: %d' % deletedChars_gold.sum())
-            print('Input characterrs in segmentation: %d' % gold_nChar.sum())
-            print('Loss per character: %.4f' %(float(gold_loss)/gold_nChar))
-            print()
+            printSegAnalysis(ae_full,
+                             Xs,
+                             Xs_mask,
+                             goldsegXUtt,
+                             maxUtt,
+                             maxLen,
+                             METRIC,
+                             BATCH_SIZE,
+                             REVERSE_UTT,
+                             ACOUSTIC)
 

@@ -108,7 +108,7 @@ def wrdEmbdTargets(wrd_emb, Xae, batch_size, reverseUtt):
     return get_embds()
 
 def updateAE(ae_full, ae_phon, ae_utt, embed_words, Xs, Xs_mask, segs, maxUtt, maxLen, batch_size, reverseUtt,
-             nResample=None, fitParts=True, fitFull=False, embed_word=None, embed_words_reconst=None):
+             nResample=None, nEpoch=1, fitParts=True, fitFull=False, embed_word=None, embed_words_reconst=None):
     Xae_full, deletedChars_full, oneLetter_full = XsSeg2Xae(Xs,
                                                             Xs_mask,
                                                             segs,
@@ -130,7 +130,7 @@ def updateAE(ae_full, ae_phon, ae_utt, embed_words, Xs, Xs_mask, segs, maxUtt, m
         ae_phon.fit(Xae_wrds,
                     Yae_wrds,
                     batch_size=batch_size,
-                    epochs=1)
+                    epochs=nEpoch)
 
         ## Train utterance AE
         wordMask = Yae_full.any(axis=(-2,-1))
@@ -161,16 +161,18 @@ def updateAE(ae_full, ae_phon, ae_utt, embed_words, Xs, Xs_mask, segs, maxUtt, m
         ae_utt.fit(Xae_utt,
                    Yae_utt,
                    batch_size=batch_size,
-                   epochs=1)
+                   epochs=10*nEpoch) # Utt AE gets fewer samples than Phon AE, so we train more
 
     if fitFull:
         print('Fitting full auto-encoder network')
         ae_full.fit(Xae_full,
                     Yae_full,
                     batch_size,
-                    epochs=1)
+                    epochs=nEpoch)
 
     eval = ae_full.evaluate(Xae_full, Yae_full, batch_size, verbose=0)
+    if type(eval) is not list:
+        eval = [eval]
     print('Full AE network loss: %.4f' % eval[0])
     if len(eval) > 1:
         print('Full AE network accuracy: %.4f' % eval[1])

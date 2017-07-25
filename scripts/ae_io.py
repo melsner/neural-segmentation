@@ -7,6 +7,8 @@ from echo_words import CharacterTable
 
 ## READ METHODS
 def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, scoreInit=False):
+    if not dataDir.endswith('/'):
+        dataDir += '/'
     if acoustic:
         segfile_paths = [dataDir + x for x in os.listdir(dataDir) if x.endswith('_vad.txt')]
         goldwrd_paths = [dataDir + x for x in os.listdir(dataDir) if x.endswith('.wrd')]
