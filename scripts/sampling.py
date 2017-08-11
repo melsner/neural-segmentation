@@ -1,6 +1,18 @@
 import sys, numpy as np
 from numpy import ma, inf, nan
-from scipy.signal import argrelmax
+from scipy.signal import argrelmax, argrelmin
+
+
+
+
+
+##################################################################################
+##################################################################################
+##
+##  UTILITY METHODS
+##
+##################################################################################
+##################################################################################
 
 def getRandomPermutation(n):
     p = np.random.permutation(np.arange(n))
@@ -8,19 +20,153 @@ def getRandomPermutation(n):
     p_inv[p] = np.arange(n)
     return p, p_inv
 
-def sampleSeg(pSegs):
-    smp = np.random.uniform(size=pSegs.shape)
-    return smp < pSegs
 
-def sampleSegs(pSegs):
-    segs = dict.fromkeys(pSegs)
-    for doc in pSegs:
-        segs[doc] = sampleSeg(pSegs[doc])
+
+
+##################################################################################
+##################################################################################
+##
+##  METHODS FOR EXTRACTING SEGMENTATIONS
+##
+##################################################################################
+##################################################################################
+
+def sampleSeg(pSegs, acoustic=False, resamplePSegs=False, concentration=10):
+    if resamplePSegs:
+        smp = np.zeros_like(pSegs)
+        for i in range(len(pSegs)):
+            for j in range(len(pSegs[i])):
+                if pSegs[i,j,0] > 0 and pSegs[i,j,0] < 1:
+                    smp[i,j,0] = np.random.beta(pSegs[i,j,0]*concentration, (1-pSegs[i,j,0])*concentration)
+        segs = pSegs2Segs(smp, acoustic=acoustic)
+    else:
+        smp = np.random.uniform(size=pSegs.shape)
+        segs = smp < pSegs
     return segs
 
-def pSegs2Segs(pSegs, acoustic=False):
+def sampleSegs(pSegs, acoustic=False, resamplePSegs=False):
+    segs = dict.fromkeys(pSegs)
+    for doc in pSegs:
+        segs[doc] = sampleSeg(pSegs[doc], acoustic, resamplePSegs)
+    return segs
+
+def pSegs2Segs(pSegs, acoustic=False, threshold=0.1, implementation='delta'):
     if acoustic:
-        return
+        if implementation == 'delta':
+            return relMaxWithDelta(pSegs, threshold)
+        else:
+            padding = [(0, 0) for d in range(len(pSegs.shape))]
+            padding[1] = (1, 1)
+            pSegs_padded = np.pad(pSegs, padding, 'constant', constant_values=0.)
+            pSegs_padded[pSegs_padded < threshold] = 0
+            segs = np.zeros_like(pSegs_padded)
+            segs[argrelmax(pSegs_padded, 1)] = 1
+            return segs[:, 1:-1, :]
+    else:
+        return pSegs > 0.5
+
+def relMaxWithDelta(pSegs, threshold=0.1):
+    segs = np.zeros_like(pSegs)
+    for i in range(len(pSegs)):
+        min = max = 0
+        delta_left = delta_right = False
+        argMax = 0
+        contour = np.pad(np.squeeze(pSegs[i], -1), (0,1), 'constant', constant_values=0)
+        # print(contour)
+        for t in range(len(contour)):
+            cur = contour[t]
+            if cur > max:
+                max = cur
+                argMax = t
+            if not delta_left:
+                delta_left = max - min > threshold
+            if delta_left and not delta_right:
+                delta_right = max-cur > threshold
+            if delta_right:
+                segs[i, argMax, 0] = 1
+            if delta_right or cur < min:
+                min = max = cur
+                delta_left = delta_right = False
+                argMax = t
+            # print(delta_left)
+            # print(delta_right)
+            # print(min)
+            # print(max)
+            # print('')
+    return segs
+
+
+
+
+
+##################################################################################
+##################################################################################
+##
+##  METHODS FOR PROCESSING SAMPLED SEGMENTATIONS
+##
+##################################################################################
+##################################################################################
+
+def scoreXWrd2ScoreXChar(scores, segs, annealer, local=True):
+    if local:
+        scores_infpad = scores.copy()
+        scores_infpad[scores_infpad==0] = -inf
+        MM = np.max(scores_infpad, axis=(1,2), keepdims=True)
+        scores -= MM
+        if annealer is not None:
+            print('Score annealing temperature: %.4f' % annealer.temp())
+            scores *= float(1)/annealer.step()
+        scores = np.exp(scores)
+        ## Get indices of words spanning each time step in each sample
+        wix = segs.cumsum(-1).astype('int')
+        ## Get offsets for flattened scores array
+        offset = np.arange(0, scores.shape[0]*scores.shape[1]*scores.shape[2], scores.shape[2]).reshape((scores.shape[0],scores.shape[1],1))
+        ## Get index of first non-padding word per sample
+        padding = np.clip(scores.shape[2] - 1 - np.expand_dims(wix[...,-1], -1), 0, inf).astype('int')
+        ## Get score of word loss corresponding to each timestep
+        charscores = np.take(scores, np.clip(wix,0,scores.shape[-1]-1)+offset+padding)
+        charscores[wix > scores.shape[-1]] = 0
+        # ix = 127
+        # print('utt %d' %ix)
+        # print('scores')
+        # print(scores[ix])
+        # print('segs')
+        # print(segs[ix])
+        # print('wix')
+        # print(wix[ix])
+        # print('offset')
+        # print(offset[ix])
+        # print('padding')
+        # print(padding[ix])
+        # print('charscores')
+        # print(charscores.shape)
+        # print(charscores[ix])
+        # raw_input()
+    else:
+        scores = scores.sum(-1)
+        MM = np.max(scores, axis=1, keepdims=True)
+        scores -= MM
+        if annealer is not None:
+            print('Score annealing temperature: %.4f' % annealer.temp())
+            scores *= float(1)/annealer.step()
+        scores = np.exp(scores)
+        charscores = np.expand_dims(scores / scores.sum(-1, keepdims=True), -1)
+    return charscores
+
+def oneBest(scores, annealer, segs):
+    eScores = scores.sum(-1)
+    MM = eScores.max(-1, keepdims=True)
+    eScores -= MM
+    if annealer is not None:
+        eScores *= float(1) / annealer.temp()
+    eScores = np.exp(eScores)
+    eScores /= eScores.sum(-1, keepdims=True)
+    best = eScores.argmax(-1)
+    oneBestSegs = segs[np.arange(len(segs)), best]
+    print('One-best segmentation score: %.4f' % scores[np.arange(len(scores)), best].sum())
+    print('One-best mean sample prob: %.4f' % eScores[np.arange(len(eScores)), best].mean())
+    print('One-best segmentation count: %d' % oneBestSegs.sum())
+    return oneBestSegs
 
 def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=False):
     preds = model.predict(Xae, batch_size=batch_size)
@@ -206,15 +352,13 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
     lattice.addNode('end')
 
     for s in range(segs.shape[0]):
-        #print(np.where(segs[s]))
-        #print(scores[s])
         src = lattice.nodes['start']
         src_t = -inf
-        ## Set score index to -1, shift rightward if no boundary at first timestep
-        w = -1 + int(not segs[s][0] == 1)
+        w = -1
         ## Scan to get the index of the first real word score
         while w < scores.shape[1]-1 and scores[s,w+1] == 0.:
             w += 1
+        w += int(segs[s][0] == 0)
         #print(w)
         t = 0
         while t <= segs.shape[1]:
@@ -231,7 +375,7 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
                 if w >= 0:
                     wt = scores[s, w]
                     wLen = min(t,uttLen) - max(0,src_t)
-                    wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt)
+                    wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt) # * wLen/uttLen # scale loss by character
                     #print(t, wLen, src_t, wt, scores[s,w])
                     #raw_input()
                 else:
@@ -245,97 +389,47 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
                     break
             t += 1
 
-    #print('')
-    #print(lattice)
-    #print(scores)
-    #print(segs)
-
     ## Shortest path
     segsOut = np.zeros((segs.shape[1]))
     segseq, finalscore = lattice.dijkstra()
     segsOut[segseq] = 1
-    #print(segsOut)
-    #print(finalscore)
-    #raw_input('Press any key to continue')
+
+    # print('')
+    # print(segs)
+    # print(scores)
+    # print(lattice)
+    # print(segseq)
+    # print(segsOut)
+    # print(finalscore)
+    # raw_input()
 
     return segsOut, finalscore
 
 def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viterbi', maxLen=inf, delWt=0, oneLetterWt=0,
-                    segWt=0, annealer=None, importanceSampledSegTargets = False, verbose=True):
+                    segWt=0, annealer=None, importanceSampledSegTargets=False, acoustic=False, verbose=True):
     augscores = scores + penalties
-    eScores = augscores.sum(-1)
-    if annealer is not None:
-        print('Score annealing temperature: %.4f' % annealer.temp())
-        eScores *= float(1)/annealer.step()
-    MM = np.max(eScores, axis=1, keepdims=True)
-    eScores = np.exp(eScores - MM)
-    # approximately the probability of the sample given the data
-    samplePrior = eScores / eScores.sum(axis=1, keepdims=True)
-    bestSampleXUtt = np.argmax(samplePrior, axis=1)
-    bestSegXUtt = np.zeros_like(segs[:,0,...])
-    bestSampleScore = 0
-    bestSamplePrior = 0
-    for ix in xrange(len(bestSampleXUtt)):
-        bestSegXUtt[ix] = segs[ix][bestSampleXUtt[ix]]
-        bestSampleScore += augscores[ix, bestSampleXUtt[ix]].sum()
-        bestSamplePrior += samplePrior[ix, bestSampleXUtt[ix]]
-    bestSamplePrior /= len(bestSampleXUtt)
-    bestSegXUtt = np.array(bestSegXUtt)
-    nSeg = bestSegXUtt.sum()
-    # print('best')
-    # print(bestSampleScore)
-    # print(nSeg)
-    # print('')
-    # for i in range(segs.shape[1]):
-    #     print(augscores[:,i].sum())
-    #     print(segs[:,i].sum())
-    if verbose:
-        print('1-best segmentation set: score = %s, prob = %s, num segs = %s' % (
-        bestSampleScore, bestSamplePrior, nSeg))
 
-    ## Proposal prob
-    if algorithm == 'importance' or importanceSampledSegTargets:
+    if algorithm.startswith('importance') or importanceSampledSegTargets:
         priorSeg = np.expand_dims(np.squeeze(priorSeg, -1), 1)
         qSeg = segs * priorSeg + (1 - segs) * (1 - priorSeg)
 
-        wts = np.expand_dims(samplePrior, -1) / qSeg
-        wts = wts / wts.sum(axis=1, keepdims=True)
-
-        # print("score distr:", dist[:10])
-
-        # print("shape of segment matrix", segmat.shape)
-        # print("best score sample", np.argmax(-scores))
-        # print("transformed losses for utt 0", eScores[:, 0])
-        # print("best score sample", np.argmax(eScores))
-        # best_score = np.argmax(eScores)
-
-        # print("top row of distr", pSeg[:, 0])
-        # print("top row of correction", qSeg[:, 0])
-        # print("top row of weights", wts[:, 0])
-
-        # sample x utterance x segment
-        # nSamples = segmat.shape[1]
+        charScores = scoreXWrd2ScoreXChar(augscores, segs, annealer=annealer, local=algorithm.endswith('Local'))
+        wts = charScores / qSeg
+        wts = np.nan_to_num(wts / wts.sum(axis=1, keepdims=True))
         wtSegs = segs * wts
-
-        # for si in range(nSamples):
-        #    print("seg vector", si, segmat[si, 0, :])
-        #    print("est posterior", pSeg[si, 0])
-        #    print("q", qSeg[si, 0])
-        #    print("weight", wts[si, 0])
-        #    print("contrib", wtSegs[si, 0])
-
         segTargetsXUtt = np.expand_dims(wtSegs.sum(axis=1), -1)
 
     if algorithm == '1best':
-        ## Nothing changes, used best sample's segmentations
+        bestSegXUtt = oneBest(augscores, annealer, segs)
         if not importanceSampledSegTargets:
             segTargetsXUtt = np.expand_dims(bestSegXUtt, -1)
-    elif algorithm == 'importance':
-        bestSegXUtt = segTargetsXUtt > .5
+    elif algorithm.startswith('importance'):
+        bestSegXUtt = pSegs2Segs(segTargetsXUtt, acoustic)
         nSeg = bestSegXUtt.sum()
-        print('Importance-sampled segmentation set: num segs = %s' % nSeg)
+        print('Importance-sampled segmentation set: num segs = %d' % nSeg)
     elif algorithm == 'viterbi':
         batch_score = 0
+        bestSegXUtt = np.zeros((priorSeg.shape[0], priorSeg.shape[1]))
         for i in range(len(scores)):
             bestSegXUtt[i], utt_score = viterbiDecode(segs[i],
                                                       scores[i],
@@ -345,10 +439,10 @@ def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viter
                                                       oneLetterWt,
                                                       segWt)
             batch_score += utt_score
-        print('Best Viterbi-decoded segmentation set: score = %s, num segs = %s' %(batch_score, bestSegXUtt.sum()))
-        nSeg = bestSegXUtt.sum()
+        bestSegXUtt = np.expand_dims(bestSegXUtt, -1)
+        print('Best Viterbi-decoded segmentation set: score = %s, num segs = %d' %(batch_score, bestSegXUtt.sum()))
         if not importanceSampledSegTargets:
-            segTargetsXUtt = np.expand_dims(bestSegXUtt, -1)
+            segTargetsXUtt = bestSegXUtt
     else:
         raise ValueError('''The sampling algorithm you have requested ("%s") is not supported.'
                             Please use one of the following:
@@ -356,7 +450,7 @@ def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viter
                             importance
                             1best
                             viterbi''')
-    return segTargetsXUtt, bestSegXUtt, nSeg
+    return segTargetsXUtt, bestSegXUtt
 
 
 def KL(pSeg1, pSeg2):

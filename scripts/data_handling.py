@@ -4,7 +4,18 @@ from scipy.signal import resample
 from echo_words import CharacterTable, pad
 from sampling import scoreXUtt
 
-## GENERAL METHODS
+
+
+
+
+##################################################################################
+##################################################################################
+##
+##  GENERAL PURPOSE METHODS
+##
+##################################################################################
+##################################################################################
+
 def segs2pSegs(segs, interpolationRate=0.1):
     return (1-interpolationRate) * segs + interpolationRate * 0.5 * np.ones_like(segs)
 
@@ -41,7 +52,7 @@ def XsSeg2XaePhon(Xs, Xs_mask, segs, maxLen, nResample=None):
                 w_len = maxLen
             else:
                 word = utt[j][:w_len]
-            w_target[:w_len] = word
+            w_target[-w_len:] = word
             Xae_phon.append(w_target)
     Xae_phon = np.stack(Xae_phon)
     deletedChars = np.array(deletedChars)
@@ -74,7 +85,7 @@ def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, nResample=None, check_output=Fa
                 w_len = maxLen
             else:
                 word = utt[j][:w_len]
-            w_target[:w_len] = word
+            w_target[-w_len:] = word
             utt[j] = w_target
             utt_target[padwords+j] = utt[j]
         extraWDel = 0
@@ -130,9 +141,7 @@ def getYae(Xae, reverseUtt):
         Yae = Xae
     return Yae
 
-
-
-def printSegAnalysis(model, Xs, Xs_mask, segs, maxUtt, maxLen, metric, batch_size, reverse_utt, acoustic):
+def printSegAnalysis(ae, Xs, Xs_mask, segs, maxUtt, maxLen, reverseUtt=False, batch_size=128, acoustic=False):
     Xae, deletedChars, oneLetter = XsSeg2Xae(Xs,
                                              Xs_mask,
                                              segs,
@@ -140,9 +149,9 @@ def printSegAnalysis(model, Xs, Xs_mask, segs, maxUtt, maxLen, metric, batch_siz
                                              maxLen,
                                              acoustic)
 
-    Yae = getYae(Xae, reverse_utt)
+    Yae = getYae(Xae, reverseUtt)
 
-    eval = model.evaluate(Xae, Yae, batch_size=batch_size, verbose=0)
+    eval = ae.evaluate(Xae, Yae, batch_size=batch_size)
     if type(eval) is not list:
         eval = [eval]
 
@@ -161,7 +170,15 @@ def printSegAnalysis(model, Xs, Xs_mask, segs, maxUtt, maxLen, metric, batch_siz
 
 
 
-## TEXT DATA
+
+##################################################################################
+##################################################################################
+##
+##  METHODS FOR PROCESSING CHARACTER DATA
+##
+##################################################################################
+##################################################################################
+
 def text2Xs(text, maxChar, ctable):
     nUtts = len(text)
     Xs = np.zeros((nUtts, maxChar, ctable.dim()), dtype=np.bool)
@@ -225,7 +242,6 @@ def charSeq2WrdSeq(segsXUtt, text):
         rText = reconstructUtt(text[utt], thisSeg, 100, wholeSent=True)
         res.append(rText)
     return res
-
 
 def reconstructUtt(charSeq, segs, maxUtt, wholeSent=False):
     #print(segs)
@@ -300,9 +316,9 @@ def reconstructXae(Xae, ctable):
         raise ValueError('Xae must have shape 3 or 4 (got shape %i)' %Xae.shape)
     return reconstruction
 
-def printReconstruction(utt_ids, model, Xae, ctable, batch_size, reverseUtt):
+def printReconstruction(utt_ids, ae, Xae, ctable, batch_size=128, reverseUtt=False):
     Yae = getYae(Xae, reverseUtt)
-    preds = model.predict(Xae[utt_ids], batch_size=batch_size)
+    preds = ae.predict(Xae[utt_ids], batch_size=batch_size)
     input_reconstruction = reconstructXae(Xae[utt_ids], ctable)
     target_reconstruction = reconstructXae(Yae[utt_ids], ctable)
     output_reconstruction = reconstructXae(preds[range(len(utt_ids))], ctable)
@@ -315,7 +331,15 @@ def printReconstruction(utt_ids, model, Xae, ctable, batch_size, reverseUtt):
 
 
 
-## ACOUSTIC DATA
+
+##################################################################################
+##################################################################################
+##
+##  METHODS FOR PROCESSING ACOUSTIC DATA
+##
+##################################################################################
+##################################################################################
+
 def timeSegs2frameSegs(timeseg_file):
     intervals = {}
     speech = {}

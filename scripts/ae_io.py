@@ -5,7 +5,18 @@ from data_handling import charSeq2WrdSeq, frameSegs2timeSegs, timeSegs2frameSegs
 frameInputs2Utts, frameSegs2FrameSegsXUtt, texts2Xs, getMask, reconstructXs
 from echo_words import CharacterTable
 
-## READ METHODS
+
+
+
+
+##################################################################################
+##################################################################################
+##
+##  READ METHODS
+##
+##################################################################################
+##################################################################################
+
 def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, scoreInit=False):
     if not dataDir.endswith('/'):
         dataDir += '/'
@@ -224,7 +235,16 @@ def readMFCCs(path, filter_file=None):
 
 
 
-## WRITE METHODS
+
+
+##################################################################################
+##################################################################################
+##
+##  WRITE METHODS
+##
+##################################################################################
+##################################################################################
+
 def writeLog(batch_num_global, iteration, epochAELoss, epochAcc, epochSegLoss, epochDel, epochOneL, epochSeg, gold,
              segsProposal, logdir, intervals=None, acoustic=False, print_headers=False, filename='log.txt'):
     headers = ['Batch', 'Iteration']

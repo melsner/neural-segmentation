@@ -3,6 +3,16 @@ import sys, numpy as np, time
 from data_handling import charSeq2WrdSeq
 
 
+
+
+##################################################################################
+##################################################################################
+##
+##  CHARACTER SEGMENTATION SCORING
+##
+##################################################################################
+##################################################################################
+
 def precision_recall(n_matched, n_gold, n_proposed):
     """Calculates the classification precision and recall, given
     the number of true positives, the number of existing positives,
@@ -86,6 +96,66 @@ def scoreBreaks(surface, found):
         matched += len(trueBreaks.intersection(foundBreaks))
 
     return precision_recall_f(matched, actual, proposed)
+
+def getBounds(wordLst):
+    bounds = []
+
+    x0 = 0
+    for ii,wi in enumerate(wordLst):
+        (b1,b2) = (x0, x0 + len(wordLst[ii]))
+        bounds.append((b1, b2))
+        x0 += len(wordLst[ii])
+
+    return bounds
+
+def scoreWords(underlying, found):
+    matched = 0
+    proposed = 0
+    actual = 0
+
+    for wReal,wFound in zip(underlying, found):
+        realBounds = getBounds(wReal)
+        foundBounds = getBounds(wFound)
+
+        # print set(realSeq).intersection(foundSeq)
+
+        actual += len(realBounds)
+        proposed += len(foundBounds)
+        matched += len(set(realBounds).intersection(foundBounds))
+
+    return precision_recall_f(matched, actual, proposed)
+
+def scoreLexicon(underlying, found):
+    realLex = set()
+    foundLex = set()
+
+    for wReal,wFound in zip(underlying, found):
+        for word in wReal:
+            if type(word) == list:
+                word = tuple(word)
+            realLex.add(word)
+
+        for word in wFound:
+            if type(word) == list:
+                word = tuple(word)
+            foundLex.add(word)
+
+    actual = len(realLex)
+    proposed = len(foundLex)
+    matched = len(realLex.intersection(foundLex))
+
+    return precision_recall_f(matched, actual, proposed)
+
+
+
+
+##################################################################################
+##################################################################################
+##
+##  ACOUSTIC SEGMENTATION SCORING
+##
+##################################################################################
+##################################################################################
 
 def scoreFrameSegs(actual, found, tol=0.03, verbose=False):
     matched_b = matched_w = 0
@@ -244,34 +314,6 @@ def scoreFrameSegs(actual, found, tol=0.03, verbose=False):
            (matched_w, actual_w, proposed_w), \
            precision_recall_f(matched_w, actual_w, proposed_w)
 
-def getBounds(wordLst):
-    bounds = []
-
-    x0 = 0
-    for ii,wi in enumerate(wordLst):
-        (b1,b2) = (x0, x0 + len(wordLst[ii]))
-        bounds.append((b1, b2))
-        x0 += len(wordLst[ii])
-
-    return bounds
-
-def scoreWords(underlying, found):
-    matched = 0
-    proposed = 0
-    actual = 0
-
-    for wReal,wFound in zip(underlying, found):
-        realBounds = getBounds(wReal)
-        foundBounds = getBounds(wFound)
-
-        # print set(realSeq).intersection(foundSeq)
-
-        actual += len(realBounds)
-        proposed += len(foundBounds)
-        matched += len(set(realBounds).intersection(foundBounds))
-
-    return precision_recall_f(matched, actual, proposed)
-
 def countIntersectWithTol(s1, s2, tol=0.02):
     s1 = set(s1)
     s2 = set(s2)
@@ -293,40 +335,17 @@ def scoreFrameWords(underlying, found):
 
     return precision_recall_f(matched,actual,proposed)
 
-def scoreLexicon(underlying, found):
-    realLex = set()
-    foundLex = set()
 
-    for wReal,wFound in zip(underlying, found):
-        for word in wReal:
-            if type(word) == list:
-                word = tuple(word)
-            realLex.add(word)
 
-        for word in wFound:
-            if type(word) == list:
-                word = tuple(word)
-            foundLex.add(word)
 
-    actual = len(realLex)
-    proposed = len(foundLex)
-    matched = len(realLex.intersection(foundLex))
 
-    # print "-- real lexicon --"
-
-    # for xx in realLex:
-    #     print cat(xx)
-
-    # print
-
-    # print "-- found lexicon --"
-
-    # for xx in foundLex:
-    #     print cat(xx)
-
-    # print actual, "true words", proposed, "found words", matched, "matched"
-
-    return precision_recall_f(matched, actual, proposed)
+##################################################################################
+##################################################################################
+##
+##  GENERAL PURPOSE SCORING METHODS
+##
+##################################################################################
+##################################################################################
 
 def getSegScore(segsGold, segsProposal, tol=.03):
     return list(scoreFrameSegs(segsGold, segsProposal, tol))
