@@ -211,7 +211,7 @@ if __name__ == "__main__":
     AE_NET = checkpoint.get('AENet', not args.noAENet)
     assert SEG_NET or AE_NET, 'At least one of the networks must be turn on.'
     ALGORITHM = args.algorithm if args.algorithm else checkpoint.get('algorithm', 'importance')
-    assert ALGORITHM in ['importance', '1best', 'viterbi'], 'Algorithm "%s" is not supported. Use one of: %s' %(ALGORITHM, ', '.join['importance"', '1best', 'viterbi'])
+    assert ALGORITHM in ['importance', 'importanceLocal', '1best', 'viterbi'], 'Algorithm "%s" is not supported. Use one of: %s' %(ALGORITHM, ', '.join['importance"', '1best', 'viterbi'])
     assert AE_NET or not ALGORITHM == 'viterbi', 'Viterbi sampling requires the AE network to be turned on.'
     OPTIM = args.optimizer if args.optimizer else checkpoint.get('optimizer', 'nadam' if ACOUSTIC else 'nadam')
     REVERSE_UTT = args.reverseUtt
@@ -671,8 +671,8 @@ if __name__ == "__main__":
         ## ENCODER-DECODER LAYERS
         wordEncoderTensor = wordEncoder(phonInput)
         wordsEncoderTensor = wordsEncoder(fullInput)
-        wordDecoderTensor = wordDecoder(wordDecInput)
-        wordsDecoderTensor = wordsDecoder(uttInput)
+        wordDecoderTensor = Masking(mask_value=0.0)(Lambda(m_phon2phon)(wordDecoder(wordDecInput)))
+        wordsDecoderTensor = Masking(mask_value=0.0)(Lambda(m_full2full)(wordsDecoder(uttInput)))
 
         phonEncoderDecoder = wordDecoder(wordEncoderTensor)
         phonEncoderDecoder = Lambda(m_phon2phon, name='PhonPremask')(phonEncoderDecoder)
@@ -725,12 +725,12 @@ if __name__ == "__main__":
         embed_words_reconst = K.function(inputs=[fullInput, K.learning_phase()], outputs=[fullEncoderUttDecoder], name='EmbedWordsReconstructed')
         embed_words_reconst = makeFunction(embed_words_reconst)
 
-        word_decoder = Model(inputs=wordDecInput, outputs=wordDecoderTensor, name='WordDecoder')
+        word_decoder = Model(inputs=[wordDecInput,phonInput], outputs=wordDecoderTensor, name='WordDecoder')
         word_decoder.compile(loss="mean_squared_error" if ACOUSTIC else masked_categorical_crossentropy,
                              metrics=None if ACOUSTIC else [masked_categorical_accuracy],
                              optimizer=optim_map[OPTIM])
 
-        words_decoder = Model(inputs=uttInput, outputs=wordsDecoderTensor, name='WordsDecoder')
+        words_decoder = Model(inputs=[uttInput,fullInput], outputs=wordsDecoderTensor, name='WordsDecoder')
         words_decoder.compile(loss="mean_squared_error" if ACOUSTIC else masked_categorical_crossentropy,
                               metrics=None if ACOUSTIC else [masked_categorical_accuracy],
                               optimizer=optim_map[OPTIM])
@@ -1164,7 +1164,10 @@ if __name__ == "__main__":
             for s in range(N_SAMPLES):
                 sys.stdout.write('\rSample %d/%d' %(s+1, N_SAMPLES))
                 sys.stdout.flush()
-                segs_batch = sampleSeg(pSegs_batch, acoustic=ACOUSTIC, resamplePSegs=ACOUSTIC)
+                if iteration < trainNoSegIters:
+                    segs_batch = sampleSeg(pSegs_batch)
+                else:
+                    segs_batch = sampleSeg(pSegs_batch, acoustic=ACOUSTIC, resamplePSegs=ACOUSTIC)
                 segSamples_batch[:,s,:] = np.squeeze(segs_batch, -1)
 
                 if AE_NET:
@@ -1183,8 +1186,9 @@ if __name__ == "__main__":
                     scores_batch[:, s, :] = scoreXUtt(scorerNetwork,
                                                       input_batch,
                                                       target_batch,
-                                                      BATCH_SIZE,
-                                                      REVERSE_UTT,
+                                                      reverseUtt=REVERSE_UTT,
+                                                      batch_size=BATCH_SIZE,
+                                                      agg='sum' if ALGORITHM=='viterbi' else 'mean',
                                                       metric=METRIC)
 
                     penalties_batch[:,s,:] -= deletedChars_batch * DEL_WT

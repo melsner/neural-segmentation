@@ -515,5 +515,4 @@ def filterMFCCs(mfccs, intervals, segs, FRAME_SIZE=40):
             mfcc_intervals[doc] = np.append(mfcc_intervals[doc], mfccs[doc][sf:ef,:], 0)
         print('Document "%s" has %d speech frames.' %(doc, len(mfcc_intervals[doc])))
         total_frames += len(mfcc_intervals[doc])
-    print('Complete dataset has %d speech frames.' %total_frames)
-    return mfcc_intervals
+    return mfcc_intervals, total_frames

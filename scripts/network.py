@@ -129,34 +129,44 @@ class AE(object):
         self.word_decoder = word_decoder
         self.words_decoder = words_decoder
 
-    def decode_word(self, word_embeddings, batch_size=128):
-        return self.word_decoder.predict(word_embeddings, batch_size=batch_size)
+    def decode_word(self, input, batch_size=128):
+        return self.word_decoder.predict(input, batch_size=batch_size)
 
-    def decode_words(self, words_embeddings, batch_size=128):
-        return self.words_decoder.predict(words_embeddings, batch_size=batch_size)
+    def decode_words(self, input, batch_size=128):
+        return self.words_decoder.predict(input, batch_size=batch_size)
 
-    def predict(self, input, batch_size=128):
+    ## Faster but more memory intensive
+    def predictA(self, input, batch_size=128):
         return self.full.predict(input, batch_size=batch_size)
 
-    def predict2(self, input, batch_size=128):
+    ## Slower but more memory efficient
+    def predictB(self, input, batch_size=128):
         word_embeddings = self.embed_words(input, learning_phase=0, batch_size=batch_size)
         word_embeddings_reconstructed = self.utt.predict(word_embeddings, batch_size=batch_size)
-        words_reconstructed = self.decode_words(word_embeddings_reconstructed, batch_size=batch_size)
+        words_reconstructed = self.decode_words([word_embeddings_reconstructed, input], batch_size=batch_size)
         return words_reconstructed
 
-    def evaluate(self, input, target, batch_size=128):
+    def predict(self, input, batch_size=128):
+        return self.predictB(input, batch_size)
+
+    ## Faster but more memory intensive
+    def evaluateA(self, input, target, batch_size=128):
         eval = self.full.evaluate(input, target, batch_size=128, verbose=0)
         if type(eval) is not list:
             eval = [eval]
         return eval
 
-    def evaluate2(self, input, target, batch_size=128):
+    ## Slower but more memory efficient
+    def evaluateB(self, input, target, batch_size=128):
         word_embeddings = self.embed_words(input, learning_phase=0, batch_size=batch_size)
         word_embeddings_reconstructed = self.utt.predict(word_embeddings, batch_size=batch_size)
-        eval = self.words_decoder.evaluate(word_embeddings_reconstructed, target, batch_size=batch_size, verbose=0)
+        eval = self.words_decoder.evaluate([word_embeddings_reconstructed, input], target, batch_size=batch_size, verbose=0)
         if type(eval) is not list:
             eval = [eval]
         return eval
+
+    def evaluate(self, input, target, batch_size=128):
+        return self.evaluateB(input, target, batch_size)
 
     def update(self, Xs, Xs_mask, segs, maxUtt, maxLen, reverseUtt=False, batch_size=128,
                  nResample=None, nEpoch=1, fitParts=True, fitFull=True):
@@ -850,7 +860,10 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
                                                  nResample)
         Yae = getYae(Xae, reverseUtt)
         print('Computing network losses on cross-validation set')
-        cvAELoss = lossXChar(ae, Xae, Yae, batch_size, acoustic, 'mse' if acoustic else 'xent')
+        eval = ae.evaluate(Xae, Yae, batch_size=batch_size)
+        cvAELoss = eval[0]
+        if not acoustic:
+            cvAEAcc = eval[1]
         cvDel = deletedChars.sum()
         cvOneL = oneLetter.sum()
 
@@ -871,7 +884,7 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
     segScore = writeLog(batch_num,
                         iteration,
                         cvAELoss if ae_net else None,
-                        None,
+                        cvAEAcc if not acoustic else None,
                         None,
                         cvDel if ae_net else None,
                         cvOneL if ae_net else None,

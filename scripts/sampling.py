@@ -107,7 +107,62 @@ def relMaxWithDelta(pSegs, threshold=0.1):
 ##################################################################################
 ##################################################################################
 
-def scoreXWrd2ScoreXChar(scores, segs, annealer, local=True):
+def scoreXUtt(model, Xae, Yae, reverseUtt=False, batch_size=128, metric='logprob', agg='mean'):
+    preds = model.predict(Xae, batch_size=batch_size)
+
+    if metric == "logprob":
+        score = np.nan_to_num(np.log(preds))
+        score = score * Yae
+
+        ## Zero-out scores for padding chars
+        score = score * (np.expand_dims(Yae.argmax(-1), -1) > 0).any(-1, keepdims=True)
+
+        ## Aggregate losses within each word
+        if agg == 'mean':
+            score = score.sum(-1)
+            score[score==0] = nan
+            score = np.nan_to_num(np.nanmean(score, axis=-1))
+        elif agg == 'sum':
+            score = score.sum(axis=(2,3))
+        else:
+            raise ValueError('''The aggregation function you have requested ("%s") is not supported.
+                                Supported aggregators are "mean" and "sum".''' % agg)
+        if reverseUtt:
+            score = np.flip(score, 1)
+    elif metric == 'logprobbinary':
+        score = np.nan_to_num(np.log(preds)) * Yae + np.nan_to_num(np.log(1-preds)) * (1-Yae)
+
+        ## Zero-out scores for padding chars
+        score = score * (np.expand_dims(Xae.argmax(-1), -1) > 0).any(-1, keepdims=True)
+        score = np.expand_dims(score.sum(axis=(1,2)), -1)
+    elif metric == 'mse':
+        ## Initialize score as negative squared error
+        score = -((preds - Yae) ** 2)
+
+        ## Zero-out scores for padding chars
+        score *= Yae.any(-1, keepdims=True)
+
+        ## Get MSE per character
+        score = score.mean(-1)
+
+        ## Aggregate losses within each word
+        if agg == 'mean':
+            score[score==0] = nan
+            score = np.nanmean(score, axis=-1)
+        elif agg == 'sum:':
+            score = score.sum(-1)
+        else:
+            raise ValueError('''The aggregation function you have requested ("%s") is not supported.
+                                    Supported aggregators are "mean" and "sum".''' % agg)
+        if reverseUtt:
+            score = np.flip(score, 1)
+    else:
+        raise ValueError('''The loss metric you have requested ("%s") is not supported.
+                            Supported metrics are "logprob" and "mse".''' %metric)
+
+    return score
+
+def processScores(scores, segs, Xs_mask, annealer, local=True):
     if local:
         scores_infpad = scores.copy()
         scores_infpad[scores_infpad==0] = -inf
@@ -143,7 +198,8 @@ def scoreXWrd2ScoreXChar(scores, segs, annealer, local=True):
         # print(charscores[ix])
         # raw_input()
     else:
-        scores = scores.sum(-1)
+        scores[scores==0] = nan
+        scores = np.nanmean(scores, axis=-1)
         MM = np.max(scores, axis=1, keepdims=True)
         scores -= MM
         if annealer is not None:
@@ -154,7 +210,7 @@ def scoreXWrd2ScoreXChar(scores, segs, annealer, local=True):
     return charscores
 
 def oneBest(scores, annealer, segs):
-    eScores = scores.sum(-1)
+    eScores = scores.mean(-1)
     MM = eScores.max(-1, keepdims=True)
     eScores -= MM
     if annealer is not None:
@@ -167,52 +223,6 @@ def oneBest(scores, annealer, segs):
     print('One-best mean sample prob: %.4f' % eScores[np.arange(len(eScores)), best].mean())
     print('One-best segmentation count: %d' % oneBestSegs.sum())
     return oneBestSegs
-
-def scoreXUtt(model, Xae, Yae, batch_size, reverseUtt, metric="logprob", debug=False):
-    preds = model.predict(Xae, batch_size=batch_size)
-
-    if metric == "logprob":
-        score = np.nan_to_num(np.log(preds))
-        score = score * Yae
-        #print(Yae.argmax(-1))
-        #print(score)
-        ## Zero-out scores for padding chars
-        score = score * (np.expand_dims(Yae.argmax(-1), -1) > 0).any(-1, keepdims=True)
-        ## Sum out char, len(chars)
-        score = score.sum(axis=(2,3))
-        # if debug:
-        #     for u in range(len(score1)):
-        #         for w in range(len(score1[u])):
-        #             print(score1[u, w])
-        #             print(score2[u, w])
-        #             print(score3[u, w])
-        #             print((np.expand_dims(Yae[u, w].argmax(-1), -1) > 0).sum())
-        #             print(score4[u,w])
-        #             raw_input('Press any key to continue')
-        if reverseUtt:
-            score = np.flip(score, 1)
-    elif metric == 'logprobbinary':
-        score = np.nan_to_num(np.log(preds)) * Yae + np.nan_to_num(np.log(1-preds)) * (1-Yae)
-        ## Zero-out scores for padding chars
-        score = score * (np.expand_dims(Xae.argmax(-1), -1) > 0).any(-1, keepdims=True)
-        score = np.expand_dims(score.sum(axis=(1,2)), -1)
-    elif metric == 'mse':
-        ## Initialize score as negative squared error
-        score = -((preds - Yae) ** 2)
-        ## Zero-out scores for padding chars
-        score *= Yae.any(-1, keepdims=True)
-        ## Get MSE per character
-        score = score.mean(-1)
-        ## Sum MSE's within each word
-        score = score.sum(-1)
-        if reverseUtt:
-            score = np.flip(score, 1)
-    else:
-        raise ValueError('''The loss metric you have requested ("%s") is not supported.
-                            Supported metrics are "logprob" and "mse".''' %metric)
-
-    ## Zero out losses from padding regions
-    return score
 
 def lossXChar(model, Xae, Yae, batch_size, acoustic=False, loss='xent'):
     preds = model.predict(Xae, batch_size=batch_size)
@@ -413,7 +423,7 @@ def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viter
         priorSeg = np.expand_dims(np.squeeze(priorSeg, -1), 1)
         qSeg = segs * priorSeg + (1 - segs) * (1 - priorSeg)
 
-        charScores = scoreXWrd2ScoreXChar(augscores, segs, annealer=annealer, local=algorithm.endswith('Local'))
+        charScores = processScores(augscores, segs, Xs_mask, annealer=annealer, local=algorithm.endswith('Local'))
         wts = charScores / qSeg
         wts = np.nan_to_num(wts / wts.sum(axis=1, keepdims=True))
         wtSegs = segs * wts

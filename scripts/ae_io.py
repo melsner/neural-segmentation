@@ -37,6 +37,16 @@ def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, s
             checkpoint['segs_init'] = segs_init
         vadBreaks = checkpoint.get('vadBreaks', intervals2ForcedSeg(intervals))
         checkpoint['vadBreaks'] = vadBreaks
+        if 'raw' in checkpoint:
+            raw = checkpoint['raw']
+            total = checkpoint['total']
+            FRAME_SIZE = raw[raw.keys()[0]].shape[-1]
+        else:
+            raw, FRAME_SIZE = readMFCCs(dataDir)
+            raw, total = filterMFCCs(raw, intervals, segs_init, FRAME_SIZE)
+            checkpoint['raw'] = raw
+            checkpoint['total'] = total
+        print('Total speech frames: %s' %total)
         if 'gold' in checkpoint:
             gold = checkpoint['gold']
         else:
@@ -50,19 +60,14 @@ def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, s
             goldWrdSegCts = 0
             for doc in gold['wrd']:
                 goldWrdSegCts += len(gold['wrd'][doc])
-            print('Gold word segmentation count: %d' % goldWrdSegCts)
+            print('Total words: %d' % goldWrdSegCts)
+            print('Mean word length: %.2f' %(float(total)/goldWrdSegCts))
         if GOLDPHN:
             goldPhnSegCts = 0
             for doc in gold['phn']:
                 goldPhnSegCts += len(gold['phn'][doc])
-            print('Gold phone segmentation count: %d' % goldPhnSegCts)
-        if 'raw' in checkpoint:
-            raw = checkpoint['raw']
-            FRAME_SIZE = raw[raw.keys()[0]].shape[-1]
-        else:
-            raw, FRAME_SIZE = readMFCCs(dataDir)
-            raw = filterMFCCs(raw, intervals, segs_init, FRAME_SIZE)
-            checkpoint['raw'] = raw
+            print('Total phonemes: %d' % goldPhnSegCts)
+            print('Mean phoneme length: %.2f' %(float(total)/goldPhnSegCts))
 
         if scoreInit:
             if gold['wrd']:
@@ -79,8 +84,13 @@ def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, s
             gold, raw, charset = checkpoint['gold'], checkpoint['raw'], checkpoint['charset']
         else:
             gold, raw, charset = readTexts(dataDir)
-        print('Corpus length (words):', sum([len(w) for d in gold for w in gold[d]]))
-        print('Corpus length (characters):', sum([len(u) for d in raw for u in raw[d]]))
+        nChar = sum([len(w) for d in gold for w in gold[d]])
+        nWrd = sum([len(u) for d in raw for u in raw[d]])
+        meanLen = float(nChar)/nWrd
+        print('Corpus length (words):', nChar)
+        print('Corpus length (characters):', nWrd)
+        print('Mean word length:', meanLen)
+
         ctable = CharacterTable(charset)
 
     doc_list = sorted(list(raw.keys()))
