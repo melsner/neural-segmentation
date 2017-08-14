@@ -8,6 +8,29 @@ from keras import optimizers, metrics
 from keras.layers import *
 from keras import backend as K
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+try:
+    import plotly
+    import plotly.plotly as py
+    import plotly.graph_objs as go
+    import plotly.offline
+
+    # def authenticatePlotly():
+    #     with open('plot.ly.config', 'rb') as f:
+    #         config = f.readlines()
+    #     username = config[0].strip()
+    #     api_key = config[1].strip()
+    #     plotly.tools.set_credentials_file(username=username, api_key=api_key)
+    #
+    # try:
+    #     authenticatePlotly()
+    #     usePlotly = True
+    # except:
+    #     usePlotly = False
+    usePlotly = True
+except:
+    usePlotly = False
+import pickle
 from data_handling import *
 from sampling import *
 from ae_io import *
@@ -119,7 +142,7 @@ def masked_categorical_accuracy(y_true, y_pred):
 
 class AE(object):
     def __init__(self, ae_full, ae_utt=None, ae_phon=None, embed_word=None, embed_words=None, embed_words_reconst=None,
-                 word_decoder=None, words_decoder=None):
+                 word_decoder=None, words_decoder=None, latentDim=None):
         self.full = ae_full
         self.utt = ae_utt
         self.phon = ae_phon
@@ -128,6 +151,7 @@ class AE(object):
         self.embed_words_reconst = embed_words_reconst
         self.word_decoder = word_decoder
         self.words_decoder = words_decoder
+        self.latentDim = latentDim
 
     def decode_word(self, input, batch_size=128):
         return self.word_decoder.predict(input, batch_size=batch_size)
@@ -169,7 +193,7 @@ class AE(object):
         return self.evaluateB(input, target, batch_size)
 
     def update(self, Xs, Xs_mask, segs, maxUtt, maxLen, reverseUtt=False, batch_size=128,
-                 nResample=None, nEpoch=1, fitParts=True, fitFull=True):
+                 nResample=None, nEpoch=1, fitParts=True, fitFull=True, verbose=True):
         Xae_full, deletedChars_full, oneLetter_full = XsSeg2Xae(Xs,
                                                                 Xs_mask,
                                                                 segs,
@@ -187,12 +211,14 @@ class AE(object):
                                                                         nResample)
 
             Yae_wrds = getYae(Xae_wrds, reverseUtt)
-            print('Fitting phonological auto-encoder network')
+            if verbose:
+                print('Fitting phonological auto-encoder network')
             self.phon.fit(Xae_wrds,
-                        Yae_wrds,
-                        shuffle=True,
-                        batch_size=batch_size,
-                        epochs=nEpoch)
+                          Yae_wrds,
+                          shuffle=True,
+                          batch_size=batch_size,
+                          epochs=nEpoch,
+                          verbose=int(verbose))
 
             ## Extract input word embeddings
             Xae_utt = self.embed_words(Xae_full, learning_phase=1, batch_size=batch_size)
@@ -217,26 +243,31 @@ class AE(object):
             # print(np.squeeze(Yae_utt[0,...,0]))
             # raw_input()
 
-            print('Fitting utterance auto-encoder network')
+            if verbose:
+                print('Fitting utterance auto-encoder network')
             self.utt.fit(Xae_utt,
                          Yae_utt,
                          shuffle=True,
                          batch_size=batch_size,
-                         epochs=10*nEpoch)  # Utt AE gets fewer training samples than Phon AE, so we train more
+                         epochs=1*nEpoch, # Utt AE gets fewer training samples than Phon AE, so we train more
+                         verbose=int(verbose))
 
         if fitFull:
-            print('Fitting full auto-encoder network')
+            if verbose:
+                print('Fitting full auto-encoder network')
             self.full.fit(Xae_full,
                           Yae_full,
                           batch_size,
                           shuffle=True,
-                          epochs=nEpoch)
+                          epochs=nEpoch,
+                          verbose=int(verbose))
 
         eval = self.evaluate(Xae_full, Yae_full, batch_size)
 
-        print('Full AE network loss: %.4f' % eval[0])
-        if len(eval) > 1:
-            print('Full AE network accuracy: %.4f' % eval[1])
+        if verbose:
+            print('Full AE network loss: %.4f' % eval[0])
+            if len(eval) > 1:
+                print('Full AE network accuracy: %.4f' % eval[1])
 
         return Xae_full, deletedChars_full, oneLetter_full, eval
 
@@ -264,13 +295,14 @@ class AE(object):
 
         Yae = getYae(Xae, reverseUtt)
 
-        self.phon.fit(Xae,
-                      Yae,
-                      shuffle=True,
-                      batch_size=batch_size,
-                      epochs=1)
+        h = self.phon.fit(Xae,
+                          Yae,
+                          shuffle=True,
+                          batch_size=batch_size,
+                          epochs=1)
+        eval = [h.history[x][0] for x in h.history]
 
-        return Xae
+        return Xae, deletedChars, oneLetter, eval
 
     def plotFull(self, utt_ids, Xae, Yae, logdir, prefix, iteration, batch_size=128, Xae_resamp=None, debug=False):
         ## Initialize plotting objects
@@ -440,11 +472,58 @@ class AE(object):
 
         plt.close(fig)
 
+    def plotVAEpyplot(self, wrd_ids, logdir, prefix, iteration, ctable=None, reverseUtt=False, batch_size=128, debug=False):
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+
+        ticks = [[-1,-0.5,0,0.5,1]]*self.latentDim
+        samplePoints = np.array(np.meshgrid(*ticks)).T.reshape(-1,3)
+        input_placeholder = np.ones(tuple([len(samplePoints)] + list(self.phon.output_shape[1:])))
+        preds = self.decode_word([samplePoints, input_placeholder], batch_size=batch_size)
+        if reverseUtt:
+            preds = getYae(preds, reverseUtt)
+        reconstructed = reconstructXae(preds, ctable, maxLen=5)
+        for i in range(len(samplePoints)):
+            ax.text(samplePoints[i,0], samplePoints[i,1], samplePoints[i,2], reconstructed[i])
+        ax.set_xlim3d(-1, 1)
+        ax.set_ylim3d(-1, 1)
+        ax.set_zlim3d(-1, 1)
+        pickle.dump(fig, file(logdir + '/' + prefix + '_VAEplot.3D.obj', 'wb'))
+
+        plt.close(fig)
+
+    def plotVAEplotly(self, wrd_ids, logdir, prefix, iteration, ctable=None, reverseUtt=False, batch_size=128, debug=False):
+        ticks = [[-2,-1,0,1,2]]*self.latentDim
+        samplePoints = np.array(np.meshgrid(*ticks)).T.reshape(-1,3)
+        input_placeholder = np.ones(tuple([len(samplePoints)] + list(self.phon.output_shape[1:])))
+        preds = self.decode_word([samplePoints, input_placeholder], batch_size=batch_size)
+        if reverseUtt:
+            preds = getYae(preds, reverseUtt)
+        reconstructed = reconstructXae(preds, ctable, maxLen=5)
+
+        data = [go.Scatter3d(
+            x = samplePoints[:,0],
+            y = samplePoints[:,1],
+            z = samplePoints[:,2],
+            text = reconstructed,
+            mode='text'
+        )]
+        layout = go.Layout()
+        fig = go.Figure(data=data, layout=layout)
+        plotly.offline.plot(fig, filename=logdir + '/' + prefix + '_VAEplot.html', auto_open=False)
+
+    def plotVAE(self, wrd_ids, logdir, prefix, iteration, ctable=None, reverseUtt=False, batch_size=128, debug=False):
+        if usePlotly:
+            self.plotVAEplotly(wrd_ids, logdir, prefix, iteration, ctable, reverseUtt, batch_size, debug)
+        else:
+            self.plotVAEpyplot(wrd_ids, logdir, prefix, iteration, ctable, reverseUtt, batch_size, debug)
+
     def save(self, path):
         self.full.save(path)
 
     def load(self, path):
         self.full.load_weights(path, by_name=True)
+
 
 
 class Segmenter(object):
@@ -837,8 +916,10 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
     ae_net = ae != None
     seg_net = segmenter != None
     print()
-    print('Performing system evaluation')
-    print('Segmenting cross-validation set')
+    print('*'*50)
+    print('Performing system evaluation (cross-validation set)')
+    print('Using segmentations predicted by the segmenter network')
+    print('Segmenting data')
     if seg_net:
         preds = segmenter.predict(Xs,
                                   Xs_mask,
@@ -859,7 +940,7 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
                                                  maxLen,
                                                  nResample)
         Yae = getYae(Xae, reverseUtt)
-        print('Computing network losses on cross-validation set')
+        print('Computing network losses')
         eval = ae.evaluate(Xae, Yae, batch_size=batch_size)
         cvAELoss = eval[0]
         if not acoustic:
@@ -880,7 +961,7 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
             masked_proposal = np.ma.array(segs4evalXDoc[doc], mask=Xs_mask[s:e])
             segs4evalXDoc[doc] = masked_proposal.compressed()
 
-    print('Scoring segmentation of cross-validation set')
+    print('Scoring segmentation')
     segScore = writeLog(batch_num,
                         iteration,
                         cvAELoss if ae_net else None,
@@ -900,6 +981,8 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
     print('Total frames:', raw_total)
     if ae_net:
         print('Auto-encoder loss:', cvAELoss)
+        if not acoustic:
+            print('Auto-encoder accuracy:', cvAEAcc)
         print('Deletions:', cvDel)
         print('One letter words:', cvOneL)
     print('Total segmentation points:', cvSeg)
@@ -917,7 +1000,7 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
     else:
         print('Writing solutions to file')
         printSegScores(getSegScores(gold, segs4evalXDoc, acoustic), acoustic)
-        writeSolutions(logdir, segs4evalXDoc[doc_list[0]], gold[doc_list[0]], batch_num, filename='seg_cv.txt')
+        # writeSolutions(logdir, segs4evalXDoc[doc_list[0]], gold[doc_list[0]], batch_num, filename='seg_cv.txt')
 
     print()
     print('Plotting visualizations on cross-validation set')
@@ -948,3 +1031,4 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
                    'cv',
                    batch_num,
                    batch_size=batch_size)
+    print('*' * 50)

@@ -1,7 +1,7 @@
 import sys, numpy as np
 from numpy import ma, inf, nan
 from scipy.signal import argrelmax, argrelmin
-
+from data_handling import XsSeg2Xae, getYae
 
 
 
@@ -107,11 +107,29 @@ def relMaxWithDelta(pSegs, threshold=0.1):
 ##################################################################################
 ##################################################################################
 
-def scoreXUtt(model, Xae, Yae, reverseUtt=False, batch_size=128, metric='logprob', agg='mean'):
-    preds = model.predict(Xae, batch_size=batch_size)
+def scoreXUtt(ae, Xs, Xs_mask, segs, maxUtt, maxLen, logdir,
+              reverseUtt=False, batch_size=128, nResample=None, metric='logprob', agg='mean', train=False):
+    if train:
+        ae.save(logdir + '/ae_tmp.h5')
+        Xae, deletedChars, oneLetter, eval = ae.update(Xs, Xs_mask, segs, maxUtt, maxLen, verbose=False)
+    else:
+        Xae, deletedChars, oneLetter = XsSeg2Xae(Xs,
+                                                 Xs_mask,
+                                                 segs,
+                                                 maxUtt,
+                                                 maxLen,
+                                                 nResample)
+
+    Yae = getYae(Xae, reverseUtt)
+
+    preds = ae.predict(Xae, batch_size=batch_size)
+    
+    if train:
+        ae.load(logdir + '/ae_tmp.h5')
 
     if metric == "logprob":
-        score = np.nan_to_num(np.log(preds))
+        with np.errstate(divide='ignore'):
+            score = np.nan_to_num(np.log(preds))
         score = score * Yae
 
         ## Zero-out scores for padding chars
@@ -121,7 +139,8 @@ def scoreXUtt(model, Xae, Yae, reverseUtt=False, batch_size=128, metric='logprob
         if agg == 'mean':
             score = score.sum(-1)
             score[score==0] = nan
-            score = np.nan_to_num(np.nanmean(score, axis=-1))
+            with np.errstate(divide='ignore'):
+                score = np.nan_to_num(np.nanmean(score, axis=-1))
         elif agg == 'sum':
             score = score.sum(axis=(2,3))
         else:
@@ -130,7 +149,8 @@ def scoreXUtt(model, Xae, Yae, reverseUtt=False, batch_size=128, metric='logprob
         if reverseUtt:
             score = np.flip(score, 1)
     elif metric == 'logprobbinary':
-        score = np.nan_to_num(np.log(preds)) * Yae + np.nan_to_num(np.log(1-preds)) * (1-Yae)
+        with np.errstate(divide='ignore'):
+            score = np.nan_to_num(np.log(preds)) * Yae + np.nan_to_num(np.log(1-preds)) * (1-Yae)
 
         ## Zero-out scores for padding chars
         score = score * (np.expand_dims(Xae.argmax(-1), -1) > 0).any(-1, keepdims=True)
@@ -160,10 +180,11 @@ def scoreXUtt(model, Xae, Yae, reverseUtt=False, batch_size=128, metric='logprob
         raise ValueError('''The loss metric you have requested ("%s") is not supported.
                             Supported metrics are "logprob" and "mse".''' %metric)
 
-    return score
+    return score, Xae, deletedChars, oneLetter
 
-def processScores(scores, segs, Xs_mask, annealer, local=True):
+def importanceWeights(scores, segs, Xs_mask, annealer, local=True):
     if local:
+        ## Returns a tensor of shape (nUtt, nSample, nChar) with local importance weights by character
         scores_infpad = scores.copy()
         scores_infpad[scores_infpad==0] = -inf
         MM = np.max(scores_infpad, axis=(1,2), keepdims=True)
@@ -179,25 +200,10 @@ def processScores(scores, segs, Xs_mask, annealer, local=True):
         ## Get index of first non-padding word per sample
         padding = np.clip(scores.shape[2] - 1 - np.expand_dims(wix[...,-1], -1), 0, inf).astype('int')
         ## Get score of word loss corresponding to each timestep
-        charscores = np.take(scores, np.clip(wix,0,scores.shape[-1]-1)+offset+padding)
-        charscores[wix > scores.shape[-1]] = 0
-        # ix = 127
-        # print('utt %d' %ix)
-        # print('scores')
-        # print(scores[ix])
-        # print('segs')
-        # print(segs[ix])
-        # print('wix')
-        # print(wix[ix])
-        # print('offset')
-        # print(offset[ix])
-        # print('padding')
-        # print(padding[ix])
-        # print('charscores')
-        # print(charscores.shape)
-        # print(charscores[ix])
-        # raw_input()
+        wts = np.take(scores, np.clip(wix,0,scores.shape[-1]-1)+offset+padding)
+        wts[wix > scores.shape[-1]] = 0
     else:
+        ## Returns a tensor of shape (nUtt, nSample, 1) with utterance-wide importance weights by utterance
         scores[scores==0] = nan
         scores = np.nanmean(scores, axis=-1)
         MM = np.max(scores, axis=1, keepdims=True)
@@ -206,22 +212,22 @@ def processScores(scores, segs, Xs_mask, annealer, local=True):
             print('Score annealing temperature: %.4f' % annealer.temp())
             scores *= float(1)/annealer.step()
         scores = np.exp(scores)
-        charscores = np.expand_dims(scores / scores.sum(-1, keepdims=True), -1)
-    return charscores
+        wts = np.expand_dims(scores / scores.sum(-1, keepdims=True), -1)
+    return wts
 
 def oneBest(scores, annealer, segs):
-    eScores = scores.mean(-1)
-    MM = eScores.max(-1, keepdims=True)
-    eScores -= MM
+    scores[scores == 0] = nan
+    scores = np.nanmean(scores, axis=-1)
+    oldscores = scores.copy()
+    MM = scores.max(-1, keepdims=True)
+    scores -= MM
     if annealer is not None:
-        eScores *= float(1) / annealer.temp()
-    eScores = np.exp(eScores)
-    eScores /= eScores.sum(-1, keepdims=True)
-    best = eScores.argmax(-1)
+        scores *= float(1) / annealer.temp()
+    scores = np.exp(scores)
+    scores /= scores.sum(-1, keepdims=True)
+    best = scores.argmax(-1)
     oneBestSegs = segs[np.arange(len(segs)), best]
-    print('One-best segmentation score: %.4f' % scores[np.arange(len(scores)), best].sum())
-    print('One-best mean sample prob: %.4f' % eScores[np.arange(len(eScores)), best].mean())
-    print('One-best segmentation count: %d' % oneBestSegs.sum())
+    print('One-best segmentation set: score = %.4f, num segs = %d' % (oldscores[np.arange(len(oldscores)), best].mean(), oneBestSegs.sum()))
     return oneBestSegs
 
 def lossXChar(model, Xae, Yae, batch_size, acoustic=False, loss='xent'):
@@ -235,12 +241,14 @@ def lossXChar(model, Xae, Yae, batch_size, acoustic=False, loss='xent'):
 
     if loss == 'xent':
         # Cross-entropy loss
-        loss = - np.nan_to_num(np.log(preds)) * Yae
+        with np.errstate(divide='ignore'):
+            loss = - np.nan_to_num(np.log(preds)) * Yae
         ## Zero-out scores for padding chars
         loss *= real_chars
     elif loss == 'binary-xent':
         # Binary cross-entropy loss
-        loss = - (np.nan_to_num(np.log(preds))*Yae + np.nan_to_num(np.log(1-preds))*(1-Yae))
+        with np.errstate(divide='ignore'):
+            loss = - (np.nan_to_num(np.log(preds))*Yae + np.nan_to_num(np.log(1-preds))*(1-Yae))
         loss *= real_chars
     elif loss == 'mse':
         # MSE loss
@@ -350,6 +358,12 @@ class Lattice(object):
 def getViterbiWordScore(score, wLen, maxLen, delWt, oneLetterWt, segWt):
     score -= max(0, wLen-maxLen) * delWt
     score -= (wLen==1) * oneLetterWt
+    # if wLen > 0:
+    #     ## Penalize segmentations by adding setWt additional characters to the loss
+    #     segPenalty = score / wLen
+    #     score -= segWt*segPenalty
+    #     print(segPenalty)
+    #     raw_input()
     score -= segWt
     return score
 
@@ -402,6 +416,7 @@ def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
     ## Shortest path
     segsOut = np.zeros((segs.shape[1]))
     segseq, finalscore = lattice.dijkstra()
+    finalscore /= uttLen
     segsOut[segseq] = 1
 
     # print('')
@@ -420,12 +435,17 @@ def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viter
     augscores = scores + penalties
 
     if algorithm.startswith('importance') or importanceSampledSegTargets:
+        ## Extract importance weights
+        wts = importanceWeights(augscores, segs, Xs_mask, annealer=annealer, local=algorithm.endswith('Local'))
+
+        ## Compute correction distribution
         priorSeg = np.expand_dims(np.squeeze(priorSeg, -1), 1)
         qSeg = segs * priorSeg + (1 - segs) * (1 - priorSeg)
+        wts = wts / qSeg
+        with np.errstate(divide='ignore'):
+            wts = np.nan_to_num(wts / wts.sum(axis=1, keepdims=True))
 
-        charScores = processScores(augscores, segs, Xs_mask, annealer=annealer, local=algorithm.endswith('Local'))
-        wts = charScores / qSeg
-        wts = np.nan_to_num(wts / wts.sum(axis=1, keepdims=True))
+        ## Multiply in segmentation decisions
         wtSegs = segs * wts
         segTargetsXUtt = np.expand_dims(wtSegs.sum(axis=1), -1)
 
@@ -449,8 +469,9 @@ def guessSegTargets(scores, penalties, segs, priorSeg, Xs_mask, algorithm='viter
                                                       oneLetterWt,
                                                       segWt)
             batch_score += utt_score
+        batch_score /= len(scores)
         bestSegXUtt = np.expand_dims(bestSegXUtt, -1)
-        print('Best Viterbi-decoded segmentation set: score = %s, num segs = %d' %(batch_score, bestSegXUtt.sum()))
+        print('Best Viterbi-decoded segmentation set: score = %.4f, num segs = %d' %(batch_score, bestSegXUtt.sum()))
         if not importanceSampledSegTargets:
             segTargetsXUtt = bestSegXUtt
     else:

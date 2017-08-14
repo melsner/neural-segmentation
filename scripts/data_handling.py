@@ -2,7 +2,7 @@ from __future__ import print_function, division
 import sys, re, numpy as np
 from scipy.signal import resample
 from echo_words import CharacterTable, pad
-from sampling import scoreXUtt
+from numpy import inf
 
 
 
@@ -289,7 +289,8 @@ def reconstructXs(Xs, ctable):
         reconstruction.append(utt)
     return reconstruction
 
-def reconstructXae(Xae, ctable):
+def reconstructXae(Xae, ctable, maxLen=inf):
+    assert len(Xae.shape) in [3,4], 'Input must be rank 3 or 4 (got rank %d)' %len(Xae.shape)
     reconstruction = []
     if len(Xae.shape) == 4:
         for i in range(len(Xae)):
@@ -299,29 +300,31 @@ def reconstructXae(Xae, ctable):
                 Xae_charids = Xae[i,j][np.where(Xae[i,j].any(-1))]
                 Xae_charids = Xae_charids.argmax(-1)
                 if len(Xae_charids) > 0:
-                    for k in range(len(Xae_charids)):
+                    for k in range(min(len(Xae_charids),maxLen)):
                         word += ctable.indices_char[int(Xae_charids[k])]
                     reconstruction[-1].append(word)
             reconstruction[-1] = ' '.join(reconstruction[-1])
-    elif len(Xae.shape) == 3:
+    else:
         for j in range(len(Xae)):
             word = ''
             Xae_charids = Xae[j][np.where(Xae[j].any(-1))]
             Xae_charids = Xae_charids.argmax(-1)
             if len(Xae_charids) > 0:
-                for k in range(len(Xae_charids)):
+                for k in range(min(len(Xae_charids), maxLen)):
                     word += ctable.indices_char[int(Xae_charids[k])]
                 reconstruction.append(word)
-    else:
-        raise ValueError('Xae must have shape 3 or 4 (got shape %i)' %Xae.shape)
     return reconstruction
 
-def printReconstruction(utt_ids, ae, Xae, ctable, batch_size=128, reverseUtt=False):
+def printReconstruction(utt_ids, ae, Xae, ctable, batch_size=128, reverseUtt=False, maxLen=inf):
+    assert len(Xae.shape) in [3,4], 'Input must be rank 3 or 4 (got rank %d)' %len(Xae.shape)
     Yae = getYae(Xae, reverseUtt)
-    preds = ae.predict(Xae[utt_ids], batch_size=batch_size)
-    input_reconstruction = reconstructXae(Xae[utt_ids], ctable)
-    target_reconstruction = reconstructXae(Yae[utt_ids], ctable)
-    output_reconstruction = reconstructXae(preds[range(len(utt_ids))], ctable)
+    if len(Xae.shape) == 3:
+        preds = ae.phon.predict(Xae[utt_ids], batch_size=batch_size)
+    else:
+        preds = ae.predict(Xae[utt_ids], batch_size=batch_size)
+    input_reconstruction = reconstructXae(Xae[utt_ids], ctable, maxLen=maxLen)
+    target_reconstruction = reconstructXae(Yae[utt_ids], ctable, maxLen=maxLen)
+    output_reconstruction = reconstructXae(preds[range(len(utt_ids))], ctable, maxLen=maxLen)
     for utt in range(len(utt_ids)):
         print('Input:          %s' %input_reconstruction[utt])
         print('Target:         %s' %target_reconstruction[utt])

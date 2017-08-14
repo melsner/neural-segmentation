@@ -10,6 +10,7 @@ try:
 except:
     from keras.engine.training import _slice_arrays as slice_X
 from keras import backend as K
+from keras.utils.generic_utils import Progbar
 import tensorflow as tf
 from tensorflow.python.platform.test import is_gpu_available
 import numpy as np
@@ -341,7 +342,7 @@ if __name__ == "__main__":
     if crossValDir:
         print()
         print('Pre-processing cross-validation data')
-        doc_indices_cv, doc_list_cv, charDim_cv, raw_total_cv, Xs_cv, Xs_mask_cv, gold_cv, other_cv = processInputDir(dataDir, checkpoint, maxChar, ACOUSTIC)
+        doc_indices_cv, doc_list_cv, charDim_cv, raw_total_cv, Xs_cv, Xs_mask_cv, gold_cv, other_cv = processInputDir(crossValDir, checkpoint, maxChar, ACOUSTIC)
         assert charDim == charDim_cv, 'ERROR: Training and cross-validation data have different dimensionality (%i, %i)' %(charDim, charDim_cv)
         if ACOUSTIC:
             intervals_cv, vad_cv, vadBreaks_cv, SEGFILE_CV, GOLDWRD_CV, GOLDPHN_CV = other_cv
@@ -553,15 +554,20 @@ if __name__ == "__main__":
 
         ## USEFUL VARIABLES
         wLen = N_RESAMPLE if N_RESAMPLE else maxLen
-        wEmbDim = LATENT_DIM if VAE else wordHidden
+        wEncDim = LATENT_DIM if VAE else wordHidden
+        cEmbDim = 32
+        yDim = cEmbDim if cEmbDim else charDim
         if AE_TYPE == 'cnn':
             x_wrd_pad = int(2 ** (math.ceil(math.log(wLen, 2))) - wLen)
-            y_wrd_pad = int(2 ** (math.ceil(math.log(charDim, 2))) - charDim)
+            y_wrd_pad = int(2 ** (math.ceil(math.log(yDim, 2))) - yDim)
             x_utt_pad = int(2 ** (math.ceil(math.log(maxUtt, 2))) - maxUtt)
-            y_utt_pad = int(2 ** (math.ceil(math.log(wEmbDim, 2))) - wEmbDim)
+            y_utt_pad = int(2 ** (math.ceil(math.log(wEncDim, 2))) - wEncDim)
             expand = Lambda(lambda x: K.expand_dims(x, -1), name='ExpandDim')
             squeeze = Lambda(lambda x: K.squeeze(x, -1), name='SqueezeDim')
-            nFilters = 10
+            x_conv = 64
+            y_conv = 64
+            filters = 10
+            kernel_size = 3
 
         ## INPUTS
         fullInput = Input(shape=(maxUtt, wLen, charDim), name='FullInput')
@@ -584,16 +590,16 @@ if __name__ == "__main__":
         ## WORD ENCODER
         wordEncoder = phonInput
         wordEncoder = Masking(mask_value=0.0, name='WordEncoderInputMask')(wordEncoder)
-        # if not ACOUSTIC:
-        #     wordEncoder = Embedding(charDim, charDim, name='CharacterEmbedding')(Lambda(lambda x: K.argmax(x))(wordEncoder))
+        if not ACOUSTIC and cEmbDim:
+            wordEncoder = Embedding(charDim, yDim, name='CharacterEmbedding')(Lambda(lambda x: K.argmax(x), name='1Hot2ID')(wordEncoder))
         wordEncoder = Dropout(charDropout, noise_shape=(1, wLen, 1), name='CharacterDropout')(wordEncoder)
         if AE_TYPE == 'rnn':
             wordEncoder = RNN(wordHidden, name='WordEncoderRNN')(wordEncoder)
         elif AE_TYPE == 'cnn':
             wordEncoder = expand(wordEncoder)
             wordEncoder = ZeroPadding2D(padding=((0, x_wrd_pad), (0, y_wrd_pad)), name='WordInputPadder')(wordEncoder)
-            wordEncoder = Conv2D(nFilters, (3, 3), padding='same', activation='elu', name='WordConv')(wordEncoder)
-            wordEncoder = Conv2D(nFilters, (3, 3), strides=(2,2), padding='same', activation='elu', name='WordStrideConv')(wordEncoder)
+            wordEncoder = Conv2D(filters, kernel_size, padding='same', activation='elu', name='WordConv')(wordEncoder)
+            wordEncoder = Conv2D(filters, kernel_size, strides=(2, 2), padding='same', activation='elu', name='WordStrideConv')(wordEncoder)
             wordEncoder = Flatten(name='WordConvFlattener')(wordEncoder)
             wordEncoder = Dense(wordHidden, activation='elu', name='WordFullyConnected')(wordEncoder)
         if VAE:
@@ -622,8 +628,8 @@ if __name__ == "__main__":
         elif AE_TYPE == 'cnn':
             uttEncoder = expand(uttEncoder)
             uttEncoder = ZeroPadding2D(padding=((0, x_utt_pad), (0, y_utt_pad)), name='UttInputPadder')(uttEncoder)
-            uttEncoder = Conv2D(nFilters, (3, 3), padding='same', activation='elu', name='UttConv')(uttEncoder)
-            uttEncoder = Conv2D(nFilters, (3, 3), strides=(2, 2), padding='same', activation='elu', name='UttStrideConv')(uttEncoder)
+            uttEncoder = Conv2D(filters, kernel_size, padding='same', activation='elu', name='UttConv')(uttEncoder)
+            uttEncoder = Conv2D(filters, kernel_size, strides=(2, 2), padding='same', activation='elu', name='UttStrideConv')(uttEncoder)
             uttEncoder = Flatten(name='UttConvFlattener')(uttEncoder)
             uttEncoder = Dense(uttHidden, activation='elu', name='UttFullyConnected')(uttEncoder)
             uttEncoder = Dense(uttHidden, name='UttEncoderOut')(uttEncoder)
@@ -633,31 +639,31 @@ if __name__ == "__main__":
         if AE_TYPE == 'rnn':
             uttDecoder = RepeatVector(maxUtt, input_shape=(uttHidden,), name='UttEmbeddingRepeater')(uttDecInput)
             uttDecoder = RNN(uttHidden, return_sequences=True, name='UttDecoderRNN')(uttDecoder)
-            uttDecoder = TimeDistributed(Dense(wEmbDim), name='UttDecoderOut')(uttDecoder)
+            uttDecoder = TimeDistributed(Dense(wEncDim), name='UttDecoderOut')(uttDecoder)
         elif AE_TYPE == 'cnn':
-            uttDecoder = Dense(int((maxUtt + x_utt_pad) / 2 * (wEmbDim + y_utt_pad) / 2 * nFilters), activation='elu', name='UttDecoderDenseIn')(uttDecInput)
-            uttDecoder = Reshape((int((maxUtt + x_utt_pad) / 2), int((wEmbDim + y_utt_pad) / 2), nFilters), name='UttDecoderReshape')(uttDecoder)
-            uttDecoder = Conv2D(nFilters, (3, 3), padding='same', activation='elu', name='UttDeconv')(uttDecoder)
+            uttDecoder = Dense(int((maxUtt + x_utt_pad) / 2 * (wEncDim + y_utt_pad) / 2 * filters), activation='elu', name='UttDecoderDenseIn')(uttDecInput)
+            uttDecoder = Reshape((int((maxUtt + x_utt_pad) / 2), int((wEncDim + y_utt_pad) / 2), filters), name='UttDecoderReshape')(uttDecoder)
+            uttDecoder = Conv2D(filters, kernel_size, padding='same', activation='elu', name='UttDeconv')(uttDecoder)
             uttDecoder = UpSampling2D((2, 2), name='UttUpsample')(uttDecoder)
             uttDecoder = Cropping2D(((0, x_utt_pad), (0, y_utt_pad)), name='UttOutCrop')(uttDecoder)
-            uttDecoder = Conv2D(1, (3, 3), padding='same', activation='linear', name='UttDecoderOut')(uttDecoder)
+            uttDecoder = Conv2D(1, kernel_size, padding='same', activation='linear', name='UttDecoderOut')(uttDecoder)
             uttDecoder = squeeze(uttDecoder)
         uttDecoder = Model(inputs=uttDecInput, outputs=uttDecoder, name='UttDecoder')
 
         ## WORD DECODER
         if AE_TYPE == 'rnn':
-            wordDecoder = RepeatVector(wLen, input_shape=(wEmbDim,), name='WordEmbeddingRepeater')(wordDecInput)
+            wordDecoder = RepeatVector(wLen, input_shape=(wEncDim,), name='WordEmbeddingRepeater')(wordDecInput)
             wordDecoder = Masking(mask_value=0, name='WordDecoderInputMask')(wordDecoder)
             wordDecoder = RNN(wordHidden, return_sequences=True, name='WordDecoderRNN')(wordDecoder)
-            wordDecoder = TimeDistributed(Dense(charDim), name='WordDecoderDistributer')(wordDecoder)
+            wordDecoder = TimeDistributed(Dense(yDim), name='WordDecoderDistributer')(wordDecoder)
             wordDecoder = Activation('linear' if ACOUSTIC else 'softmax', name='WordDecoderOut')(wordDecoder)
         elif AE_TYPE == 'cnn':
-            wordDecoder = Dense(int((wLen + x_wrd_pad) / 2 * (charDim + y_wrd_pad) / 2 * nFilters), activation='elu', name='WordDecoderDenseIn')(wordDecInput)
-            wordDecoder = Reshape((int((wLen + x_wrd_pad) / 2), int((charDim + y_wrd_pad) / 2), nFilters), name='WordDecoderReshape')(wordDecoder)
-            wordDecoder = Conv2D(nFilters, (3, 3), padding='same', activation='elu', name='WordDeconv')(wordDecoder)
+            wordDecoder = Dense(int((wLen + x_wrd_pad) / 2 * (yDim + y_wrd_pad) / 2 * filters), activation='elu', name='WordDecoderDenseIn')(wordDecInput)
+            wordDecoder = Reshape((int((wLen + x_wrd_pad) / 2), int((yDim + y_wrd_pad) / 2), filters), name='WordDecoderReshape')(wordDecoder)
+            wordDecoder = Conv2D(filters, kernel_size, padding='same', activation='elu', name='WordDeconv')(wordDecoder)
             wordDecoder = UpSampling2D((2,2), name='WordUpsample')(wordDecoder)
             wordDecoder = Cropping2D(((0, x_wrd_pad), (0, y_wrd_pad)), name='WordOutCrop')(wordDecoder)
-            wordDecoder = Conv2D(1, (3, 3), padding='same')(wordDecoder)
+            wordDecoder = Conv2D(1, kernel_size, padding='same')(wordDecoder)
             wordDecoder = squeeze(wordDecoder)
             if not ACOUSTIC:
                 wordDecoder = TimeDistributed(Dense(charDim, activation='softmax'))(wordDecoder)
@@ -697,7 +703,8 @@ if __name__ == "__main__":
                 return ae_loss + kl_loss
 
         ## COMPILED (TRAINABLE) MODELS
-        ae_phon = Masking(mask_value=0, name='PhonMask')(phonEncoderDecoder)
+        ae_phon = phonEncoderDecoder
+        ae_phon = Masking(mask_value=0, name='PhonMask')(ae_phon)
         ae_phon = Model(inputs=phonInput, outputs=ae_phon, name='AEPhon')
         ae_phon.compile(
             loss=vae_loss if VAE else "mean_squared_error" if ACOUSTIC else masked_categorical_crossentropy,
@@ -764,7 +771,7 @@ if __name__ == "__main__":
         print('\n')
 
         ## Initialize AE wrapper object containing all sub nets for convenience
-        ae = AE(ae_full, ae_utt, ae_phon, embed_word, embed_words, embed_words_reconst, word_decoder, words_decoder)
+        ae = AE(ae_full, ae_utt, ae_phon, embed_word, embed_words, embed_words_reconst, word_decoder, words_decoder, LATENT_DIM if VAE else None)
 
     if SEG_NET:
         ## SEGMENTER NETWORK
@@ -1080,14 +1087,14 @@ if __name__ == "__main__":
 
     while iteration < trainIters:
 
-        # if iteration % 10 == 0:
+        # if batch_num_global % 50 == 0:
         #     print('Re-starting segmenter network')
         #     segmenter.load_weights(logdir + '/segmenter_init.h5', by_name=True)
 
         it0 = time.time()
 
         print()
-        print('-' * 50)
+        print('=' * 50)
         print('Iteration', iteration + 1)
 
         if SEG_NET:
@@ -1160,10 +1167,12 @@ if __name__ == "__main__":
             penalties_batch = np.zeros_like(scores_batch)
             segSamples_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxChar))
             print()
+            print('_'*50)
             print('Batch %d/%d' %((b+1)/SAMPLING_BATCH_SIZE+1, N_BATCHES))
+            print('-'*50)
+            print('Sampling')
+            pb = Progbar(target=N_SAMPLES)
             for s in range(N_SAMPLES):
-                sys.stdout.write('\rSample %d/%d' %(s+1, N_SAMPLES))
-                sys.stdout.flush()
                 if iteration < trainNoSegIters:
                     segs_batch = sampleSeg(pSegs_batch)
                 else:
@@ -1171,31 +1180,29 @@ if __name__ == "__main__":
                 segSamples_batch[:,s,:] = np.squeeze(segs_batch, -1)
 
                 if AE_NET:
-                    Xae_batch, deletedChars_batch, oneLetter_batch = XsSeg2Xae(Xs_batch,
+                    scores_batch[:, s, :], \
+                    Xae_batch, deletedChars_batch, oneLetter_batch = scoreXUtt(ae,
+                                                                               Xs_batch,
                                                                                Xs_mask_batch,
                                                                                segs_batch,
                                                                                maxUtt,
                                                                                maxLen,
-                                                                               N_RESAMPLE)
+                                                                               logdir,
+                                                                               reverseUtt=REVERSE_UTT,
+                                                                               batch_size=BATCH_SIZE,
+                                                                               nResample=N_RESAMPLE,
+                                                                               agg='sum' if ALGORITHM=='viterbi' else 'mean',
+                                                                               metric=METRIC)
 
                     Yae_batch = getYae(Xae_batch, REVERSE_UTT)
-                    input_batch = Xae_batch
-                    target_batch = Yae_batch
-                    scorerNetwork = ae
-
-                    scores_batch[:, s, :] = scoreXUtt(scorerNetwork,
-                                                      input_batch,
-                                                      target_batch,
-                                                      reverseUtt=REVERSE_UTT,
-                                                      batch_size=BATCH_SIZE,
-                                                      agg='sum' if ALGORITHM=='viterbi' else 'mean',
-                                                      metric=METRIC)
 
                     penalties_batch[:,s,:] -= deletedChars_batch * DEL_WT
                     penalties_batch[:,s,:] -= oneLetter_batch * ONE_LETTER_WT
                     if SEG_WT > 0:
                         for u in range(len(segs_batch)):
                             penalties_batch[u, s, -segs_batch[u].sum():] -= SEG_WT
+
+                pb.update(s)
 
             print()
 
@@ -1374,7 +1381,11 @@ if __name__ == "__main__":
         iteration += 1
 
         # Evaluate on training data
-        print('Scoring segmentations on training set')
+        print()
+        print('*'*50)
+        print('Performing system evaluation (training set)')
+        print('Using %s sampled segmentations' %ALGORITHM)
+        print('Scoring segmentations')
         segsProposalXDoc = dict.fromkeys(doc_list)
         for doc in segsProposalXDoc:
             s,e = doc_indices[doc]
@@ -1429,7 +1440,7 @@ if __name__ == "__main__":
             writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_dir=logdir, TextGrid=True, dataset='train')
         else:
             printSegScores(getSegScores(gold, segsProposalXDoc, ACOUSTIC), ACOUSTIC)
-            writeSolutions(logdir, segsProposalXDoc[doc_list[0]], gold[doc_list[0]], iteration, filename='seg_train.txt')
+            writeSolutions(logdir, segsProposalXDoc[doc_list[0]], gold[doc_list[0]], filename='seg_train.txt')
 
         print('Plotting visualizations on training set')
         if AE_NET:
@@ -1473,6 +1484,8 @@ if __name__ == "__main__":
                            'train',
                            iteration,
                            batch_size=BATCH_SIZE)
+
+        print('*'*50)
 
         print('Saving restore point')
         if AE_NET:

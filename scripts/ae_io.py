@@ -84,11 +84,11 @@ def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, s
             gold, raw, charset = checkpoint['gold'], checkpoint['raw'], checkpoint['charset']
         else:
             gold, raw, charset = readTexts(dataDir)
-        nChar = sum([len(w) for d in gold for w in gold[d]])
-        nWrd = sum([len(u) for d in raw for u in raw[d]])
+        nChar = sum([len(u) for d in raw for u in raw[d]])
+        nWrd = sum([len(w) for d in gold for w in gold[d]])
         meanLen = float(nChar)/nWrd
-        print('Corpus length (words):', nChar)
-        print('Corpus length (characters):', nWrd)
+        print('Corpus length (characters):', nChar)
+        print('Corpus length (words):', nWrd)
         print('Mean word length:', meanLen)
 
         ctable = CharacterTable(charset)
@@ -327,10 +327,13 @@ def writeLog(batch_num_global, iteration, epochAELoss, epochAcc, epochSegLoss, e
                 print("\t".join(["%g" % xx for xx in score_row]), file=f)
 
 ## Used only in text mode
-def writeSolutions(logdir, allBestSeg, text, iteration, filename='seg.txt'):
+def writeSolutions(logdir, allBestSeg, text, iteration=None, filename='seg.txt'):
     segmented = charSeq2WrdSeq(allBestSeg, text)
 
-    logfile = file(logdir + '/' + str(iteration) + '_' + filename, 'w')
+    if iteration:
+        logfile = file(logdir + '/' + str(iteration) + '_' + filename, 'w')
+    else:
+        logfile = file(logdir + '/' + filename, 'w')
     if type(text[0][0]) == str:
         for line in segmented:
             print(" ".join(line), file=logfile)

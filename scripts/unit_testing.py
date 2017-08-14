@@ -83,7 +83,17 @@ def testFullAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_in
             print('Example reconstructions')
             printReconstruction(utt_ids, ae, Xae, ctable, batch_size, reverseUtt)
 
-        row = [str(i), str(eval[0])]
+            if ae.latentDim == 3:
+                ae.plotVAE([15],
+                           logdir,
+                           prefix,
+                           i+1,
+                           ctable=ctable,
+                           reverseUtt=reverseUtt,
+                           batch_size=batch_size,
+                           debug=debug)
+
+        row = [str(i+1), str(eval[0])]
         if not acoustic:
             row += [str(eval[1])]
         with open(logfile, 'ab') as f:
@@ -122,17 +132,24 @@ def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, u
     ## Re-initialize network weights in case any training has already happened
     ae.load(logdir + '/ae_init.h5')
 
+    logfile = logdir + '/log_fixedphon_' + segLevel + '.txt'
+    headers = ['Iteration', 'AEPhonLoss']
+    if not acoustic:
+        headers += ['AEPhonAcc']
+    with open(logfile, 'wb') as f:
+        print('\t'.join(headers), file=f)
+
     for i in range(trainIters):
         t0 = time.time()
         print('Iteration %d' % (i + 1))
 
-        Xae = ae.trainPhonOnFixed(Xs,
-                                  Xs_mask,
-                                  Y,
-                                  maxLen,
-                                  reverseUtt=reverseUtt,
-                                  batch_size=batch_size,
-                                  nResample=nResample)
+        Xae, deletedChars, oneLetter, eval = ae.trainPhonOnFixed(Xs,
+                                                                 Xs_mask,
+                                                                 Y,
+                                                                 maxLen,
+                                                                 reverseUtt=reverseUtt,
+                                                                 batch_size=batch_size,
+                                                                 nResample=nResample)
 
         Yae = getYae(Xae, reverseUtt)
 
@@ -161,6 +178,22 @@ def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, u
             print()
             print('Example reconstructions')
             printReconstruction(utt_ids, ae, Xae, ctable, batch_size, reverseUtt)
+
+            if ae.latentDim == 3:
+                ae.plotVAE([15],
+                           logdir,
+                           prefix,
+                           i+1,
+                           ctable=ctable,
+                           reverseUtt=reverseUtt,
+                           batch_size=batch_size,
+                           debug=debug)
+
+        row = [str(i+1), str(eval[0])]
+        if not acoustic:
+            row += [str(eval[1])]
+        with open(logfile, 'ab') as f:
+            print('\t'.join(row), file=f)
 
         t1 = time.time()
         print('Iteration time: %.2fs' %(t1-t0))
