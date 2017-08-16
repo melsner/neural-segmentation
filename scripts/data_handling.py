@@ -59,6 +59,9 @@ def XsSeg2XaePhon(Xs, Xs_mask, segs, maxLen, nResample=None):
     oneLetter = np.array(oneLetter)
     return Xae_phon, deletedChars, oneLetter
 
+def make_XAE_generator():
+    pass
+
 def XsSeg2Xae(Xs, Xs_mask, segs, maxUtt, maxLen, nResample=None, check_output=False):
     Xae = np.split(Xs, len(Xs))
     FRAME_SIZE = Xs.shape[-1]
@@ -181,7 +184,7 @@ def printSegAnalysis(ae, Xs, Xs_mask, segs, maxUtt, maxLen, reverseUtt=False, ba
 
 def text2Xs(text, maxChar, ctable):
     nUtts = len(text)
-    Xs = np.zeros((nUtts, maxChar, ctable.dim()), dtype=np.bool)
+    Xs = np.zeros((nUtts, maxChar, 1))
     for ui, utt in enumerate(text):
         #Xs[ui] = ctable.encode(pad(utt[:maxChar], maxChar, "X"), maxChar)
         Xs[ui] = ctable.encode(utt[:maxChar], maxChar)
@@ -298,7 +301,6 @@ def reconstructXae(Xae, ctable, maxLen=inf):
             for j in range(len(Xae[i])):
                 word = ''
                 Xae_charids = Xae[i,j][np.where(Xae[i,j].any(-1))]
-                Xae_charids = Xae_charids.argmax(-1)
                 if len(Xae_charids) > 0:
                     for k in range(min(len(Xae_charids),maxLen)):
                         word += ctable.indices_char[int(Xae_charids[k])]
@@ -308,7 +310,6 @@ def reconstructXae(Xae, ctable, maxLen=inf):
         for j in range(len(Xae)):
             word = ''
             Xae_charids = Xae[j][np.where(Xae[j].any(-1))]
-            Xae_charids = Xae_charids.argmax(-1)
             if len(Xae_charids) > 0:
                 for k in range(min(len(Xae_charids), maxLen)):
                     word += ctable.indices_char[int(Xae_charids[k])]
@@ -324,7 +325,7 @@ def printReconstruction(utt_ids, ae, Xae, ctable, batch_size=128, reverseUtt=Fal
         preds = ae.predict(Xae[utt_ids], batch_size=batch_size)
     input_reconstruction = reconstructXae(Xae[utt_ids], ctable, maxLen=maxLen)
     target_reconstruction = reconstructXae(Yae[utt_ids], ctable, maxLen=maxLen)
-    output_reconstruction = reconstructXae(preds[range(len(utt_ids))], ctable, maxLen=maxLen)
+    output_reconstruction = reconstructXae(np.expand_dims(preds[range(len(utt_ids))].argmax(-1), -1), ctable, maxLen=maxLen)
     for utt in range(len(utt_ids)):
         print('Input:          %s' %input_reconstruction[utt])
         print('Target:         %s' %target_reconstruction[utt])
@@ -376,8 +377,8 @@ def timeSegs2frameSegs(timeseg_file):
                 seg = 0
             offset = offsets.get(doc, 0)
             if doc in speech:
-                # In rare cases, the Rasanen pre-seg system
-                # generates a start time earlier than previous
+                # In rare cases, the segmentation file
+                # contains a start time earlier than previous
                 # interval's end time, requiring us to check this.
                 s = max(s,speech[doc][-1][1])
                 speech[doc].append((s-offset,e-offset,seg))
@@ -429,11 +430,16 @@ def frameSeg2timeSeg(intervals, seg_f):
     return seg_t
 
 def frameInput2Utts(raw, vadBreaks, maxChar):
+    maxLen = min(len(raw), len(vadBreaks))
+    if len(raw) != len(vadBreaks):
+        maxLen = min(len(raw), len(vadBreaks))
+        print('Warning: Different number of timesteps in raw (%d) and vadBreaks (%d). Using %d.' %(len(raw), len(vadBreaks), maxLen))
+    s = 0
     frame_len = raw.shape[-1]
     s = 0
     Xs = []
-    while s < raw.shape[0]:
-        e = getNextFrameUtt(vadBreaks, maxChar, start_ix=s)
+    while s < maxLen:
+        e = getNextFrameUtt(vadBreaks[:maxLen], maxChar, start_ix=s)
         Xseg_batch = np.zeros((maxChar, frame_len))
         Xseg_batch[:e - s, :] = raw[s:e, :]
         Xs.append(Xseg_batch)
@@ -452,21 +458,24 @@ def frameInputs2Utts(raw, vadBreaks, maxChar):
     return np.concatenate(utts), doc_indices
 
 def frameSeg2FrameSegXUtt(framesegs, vadBreaks, maxChar):
+    maxLen = min(len(framesegs), len(vadBreaks))
+    if len(framesegs) != len(vadBreaks):
+        maxLen = min(len(framesegs), len(vadBreaks))
+        print('Warning: Different number of timesteps in framesegs (%d) and vadBreaks (%d). Using %d.' %(len(framesegs), len(vadBreaks), maxLen))
     s = 0
     Yseg = []
-    while s < framesegs.shape[0]:
-        e = getNextFrameUtt(vadBreaks, maxChar, start_ix=s)
+    while s < maxLen:
+        e = getNextFrameUtt(vadBreaks[:maxLen], maxChar, start_ix=s)
         Yseg_batch = np.zeros(maxChar)
         Yseg_batch[:e - s] = framesegs[s:e]
         Yseg.append(Yseg_batch[:,None])
         s = e
-    Yseg = np.stack(Yseg)
-    return Yseg
+    return np.stack(Yseg)
 
 def frameSegs2FrameSegsXUtt(framesegs, vadBreaks, maxChar, doc_indices):
     Ysegs = dict.fromkeys(framesegs.keys())
     for doc in Ysegs:
-        Ysegs[doc] = frameSeg2FrameSegXUtt(framesegs[doc], vadBreaks[doc], maxChar)
+        Ysegs[doc] = frameInput2Utts(np.expand_dims(framesegs[doc], -1), vadBreaks[doc], maxChar)
     Xs = np.zeros((sum([len(Ysegs[d]) for d in Ysegs]), maxChar, 1))
     for doc in doc_indices:
         s, e = doc_indices[doc]
@@ -477,23 +486,23 @@ def intervals2ForcedSeg(intervals):
     out = dict.fromkeys(intervals)
     for doc in intervals:
         out[doc] = []
-        offset = 0
-        last = 0
         for i in intervals[doc]:
-            s, e = i
-            s, e = int(np.rint(s*100)), int(np.rint(e*100))
+            s, e = int(np.rint(float(i[0]*100))), int(np.rint(float(i[1]*100)))
             interval = [0] * (e-s)
             interval[0] = 1
-            offset += s-last
             out[doc] += interval
-            last = e
         out[doc] = np.array(out[doc])
     return out
 
-def getNextFrameUtt(vad_breaks, BATCH_SIZE, start_ix=0):
-    end_ix = start_ix + 1 + np.argmax(vad_breaks[start_ix+1:]) if vad_breaks[start_ix+1:].sum() > 0 else len(vad_breaks)
-    if end_ix > start_ix + BATCH_SIZE:
-        return start_ix + BATCH_SIZE
+def getNextFrameUtt(vad_breaks, maxChar, start_ix=0):
+    # end_ix = start_ix + 1
+    # while end_ix < min(len(vad_breaks), start_ix+BATCH_SIZE):
+    #     if vad_breaks[end_ix] > 0:
+    #         break
+    #     end_ix += 1
+    # return end_ix
+    end_ix = 1 + start_ix \
+             + np.argmax(vad_breaks[start_ix+1:maxChar]) if vad_breaks[start_ix + 1:maxChar].sum() > 0 else min(len(vad_breaks), start_ix + maxChar)
     return end_ix
 
 def seg2pSegWithForced(segs, vad_breaks, interpolationRate=0.1):
@@ -514,8 +523,8 @@ def filterMFCCs(mfccs, intervals, segs, FRAME_SIZE=40):
     for doc in segs:
         mfcc_intervals[doc] = np.zeros((0,FRAME_SIZE))
         for i in intervals[doc]:
-            sf, ef = int(np.rint(float(i[0]*100))), int(np.rint(float(i[1]*100)))
-            mfcc_intervals[doc] = np.append(mfcc_intervals[doc], mfccs[doc][sf:ef,:], 0)
+            s, e = int(np.rint(float(i[0]*100))), int(np.rint(float(i[1]*100)))
+            mfcc_intervals[doc] = np.append(mfcc_intervals[doc], mfccs[doc][s:e,:], 0)
         print('Document "%s" has %d speech frames.' %(doc, len(mfcc_intervals[doc])))
         total_frames += len(mfcc_intervals[doc])
     return mfcc_intervals, total_frames

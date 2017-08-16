@@ -107,6 +107,15 @@ def predictLoop(f, ins, batch_size=32, learning_phase=0, verbose=0):
         return outs[0]
     return outs
 
+def sparse_xent(y_true,y_pred):
+    out = metrics.sparse_categorical_crossentropy(y_true, y_pred)
+    ## This is necessary because of a bug in keras' sparse cross entropy with hierarchical time series
+    out = K.reshape(out, K.shape(y_true)[:-1])
+    return out
+
+def sparse_acc(y_true,y_pred):
+    return metrics.sparse_categorical_accuracy(y_true, y_pred)
+
 def masked_categorical_crossentropy(y_true, y_pred):
     mask = K.cast(K.expand_dims(K.any(y_true, -1), axis=-1), 'float32')
     y_pred *= mask
@@ -165,10 +174,10 @@ class AE(object):
 
     ## Slower but more memory efficient
     def predictB(self, input, batch_size=128):
-        word_embeddings = self.embed_words(input, learning_phase=0, batch_size=batch_size)
-        word_embeddings_reconstructed = self.utt.predict(word_embeddings, batch_size=batch_size)
-        words_reconstructed = self.decode_words([word_embeddings_reconstructed, input], batch_size=batch_size)
-        return words_reconstructed
+        output = self.embed_words(input, learning_phase=0, batch_size=batch_size)
+        output = self.utt.predict(output, batch_size=batch_size)
+        output = self.decode_words([output, input], batch_size=batch_size)
+        return output
 
     def predict(self, input, batch_size=128):
         return self.predictB(input, batch_size)
@@ -182,12 +191,12 @@ class AE(object):
 
     ## Slower but more memory efficient
     def evaluateB(self, input, target, batch_size=128):
-        word_embeddings = self.embed_words(input, learning_phase=0, batch_size=batch_size)
-        word_embeddings_reconstructed = self.utt.predict(word_embeddings, batch_size=batch_size)
-        eval = self.words_decoder.evaluate([word_embeddings_reconstructed, input], target, batch_size=batch_size, verbose=0)
-        if type(eval) is not list:
-            eval = [eval]
-        return eval
+        output = self.embed_words(input, learning_phase=0, batch_size=batch_size)
+        output = self.utt.predict(output, batch_size=batch_size)
+        output = self.words_decoder.evaluate([output, input], target, batch_size=batch_size, verbose=0)
+        if type(output) is not list:
+            output = [output]
+        return output
 
     def evaluate(self, input, target, batch_size=128):
         return self.evaluateB(input, target, batch_size)
@@ -211,6 +220,7 @@ class AE(object):
                                                                         nResample)
 
             Yae_wrds = getYae(Xae_wrds, reverseUtt)
+
             if verbose:
                 print('Fitting phonological auto-encoder network')
             self.phon.fit(Xae_wrds,
@@ -249,7 +259,7 @@ class AE(object):
                          Yae_utt,
                          shuffle=True,
                          batch_size=batch_size,
-                         epochs=1*nEpoch, # Utt AE gets fewer training samples than Phon AE, so we train more
+                         epochs=10*nEpoch, # Utt AE gets fewer training samples than Phon AE, so we train more
                          verbose=int(verbose))
 
         if fitFull:
@@ -304,27 +314,27 @@ class AE(object):
 
         return Xae, deletedChars, oneLetter, eval
 
-    def plotFull(self, utt_ids, Xae, Yae, logdir, prefix, iteration, batch_size=128, Xae_resamp=None, debug=False):
+    def plotFull(self, Xae, Yae, logdir, prefix, iteration, batch_size=128, Xae_resamp=None, debug=False):
         ## Initialize plotting objects
         fig = plt.figure()
         fig.set_size_inches(10, 10)
-        inputs_src_raw = Xae[utt_ids]
+        inputs_src_raw = Xae
         if not Xae_resamp is None:
             ax_input = fig.add_subplot(511)
             ax_input_resamp = fig.add_subplot(512)
             ax_targ = fig.add_subplot(513)
             ax_mean = fig.add_subplot(514)
             ax_pred = fig.add_subplot(515)
-            inputs_resamp_raw = Xae_resamp[utt_ids]
+            inputs_resamp_raw = Xae_resamp
             preds_raw = self.predict(inputs_resamp_raw, batch_size=batch_size)
         else:
             ax_input = fig.add_subplot(411)
             ax_targ = fig.add_subplot(412)
             ax_mean = fig.add_subplot(413)
             ax_pred = fig.add_subplot(414)
-            inputs_src_raw = Xae[utt_ids]
+            inputs_src_raw = Xae
             preds_raw = self.predict(inputs_src_raw, batch_size=batch_size)
-        targs_raw = Yae[utt_ids]
+        targs_raw = Yae
 
         ## Plot target global mean
         mean = np.expand_dims(np.mean(Yae, axis=(0, 1, 2)), -1)
@@ -332,10 +342,10 @@ class AE(object):
         ax_mean.set_title('Target mean', loc='left')
         hm_mean = ax_mean.pcolor(mean, cmap=plt.cm.Blues)
 
-        for u in range(len(utt_ids)):
+        for u in range(len(Xae)):
             ## Set up plotting canvas
             fig.patch.set_visible(False)
-            fig.suptitle('Utterance %d, Checkpoint %d' % (utt_ids[u], iteration))
+            fig.suptitle('Utterance %d, Checkpoint %d' % (u, iteration))
 
             ## Plot source inputs
             inputs_src = []
@@ -391,22 +401,22 @@ class AE(object):
             hm_pred = ax_pred.pcolor(preds, cmap=plt.cm.Blues)
 
             ## Save plot
-            fig.savefig(logdir + '/heatmap_' + prefix + '_utt' + str(utt_ids[u]) + '_iter' + str(iteration) + '.jpg')
+            fig.savefig(logdir + '/heatmap_' + prefix + '_utt' + str(u) + '_iter' + str(iteration) + '.jpg')
 
         plt.close(fig)
 
-    def plotPhon(self, wrd_ids, Xae, Yae, logdir, prefix, iteration, batch_size=128, Xae_resamp=None, debug=False):
+    def plotPhon(self, Xae, Yae, logdir, prefix, iteration, batch_size=128, Xae_resamp=None, debug=False):
         ## Initialize plotting objects
         fig = plt.figure()
         fig.set_size_inches(10, 10)
-        inputs_src_raw = Xae[wrd_ids]
+        inputs_src_raw = Xae
         if not Xae_resamp is None:
             ax_input = fig.add_subplot(511)
             ax_input_resamp = fig.add_subplot(512)
             ax_targ = fig.add_subplot(513)
             ax_mean = fig.add_subplot(514)
             ax_pred = fig.add_subplot(515)
-            inputs_resamp_raw = Xae_resamp[wrd_ids]
+            inputs_resamp_raw = Xae_resamp
             preds_raw = self.phon.predict(inputs_resamp_raw, batch_size=batch_size)
         else:
             ax_input = fig.add_subplot(411)
@@ -414,7 +424,7 @@ class AE(object):
             ax_mean = fig.add_subplot(413)
             ax_pred = fig.add_subplot(414)
             preds_raw = self.phon.predict(inputs_src_raw, batch_size=batch_size)
-        targs_raw = Yae[wrd_ids]
+        targs_raw = Yae
 
         ## Plot target global mean
         mean = np.expand_dims(np.mean(Yae, axis=(0, 1)), -1)
@@ -425,10 +435,10 @@ class AE(object):
         if debug:
             print('=' * 50)
             print('Segmentation details for 10 randomly-selected utterances')
-        for w in range(len(wrd_ids)):
+        for w in range(len(Xae)):
             ## Set up plotting canvas
             fig.patch.set_visible(False)
-            fig.suptitle('Word %d, Checkpoint %d' % (wrd_ids[w], iteration))
+            fig.suptitle('Word %d, Checkpoint %d' % (w, iteration))
 
             ## Plot source inputs
             inputs_src = inputs_src_raw[w, ...]
@@ -468,11 +478,11 @@ class AE(object):
             hm_pred = ax_pred.pcolor(preds, cmap=plt.cm.Blues)
 
             ## Save plot
-            fig.savefig(logdir + '/heatmap_' + prefix + '_wrd' + str(wrd_ids[w]) + '_iter' + str(iteration) + '.jpg')
+            fig.savefig(logdir + '/heatmap_' + prefix + '_wrd' + str(w) + '_iter' + str(iteration) + '.jpg')
 
         plt.close(fig)
 
-    def plotVAEpyplot(self, wrd_ids, logdir, prefix, iteration, ctable=None, reverseUtt=False, batch_size=128, debug=False):
+    def plotVAEpyplot(self, logdir, prefix, ctable=None, reverseUtt=False, batch_size=128, debug=False):
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
 
@@ -492,7 +502,7 @@ class AE(object):
 
         plt.close(fig)
 
-    def plotVAEplotly(self, wrd_ids, logdir, prefix, iteration, ctable=None, reverseUtt=False, batch_size=128, debug=False):
+    def plotVAEplotly(self, logdir, prefix, ctable=None, reverseUtt=False, batch_size=128, debug=False):
         ticks = [[-2,-1,0,1,2]]*self.latentDim
         samplePoints = np.array(np.meshgrid(*ticks)).T.reshape(-1,3)
         input_placeholder = np.ones(tuple([len(samplePoints)] + list(self.phon.output_shape[1:])))
@@ -512,11 +522,11 @@ class AE(object):
         fig = go.Figure(data=data, layout=layout)
         plotly.offline.plot(fig, filename=logdir + '/' + prefix + '_VAEplot.html', auto_open=False)
 
-    def plotVAE(self, wrd_ids, logdir, prefix, iteration, ctable=None, reverseUtt=False, batch_size=128, debug=False):
+    def plotVAE(self, logdir, prefix, ctable=None, reverseUtt=False, batch_size=128, debug=False):
         if usePlotly:
-            self.plotVAEplotly(wrd_ids, logdir, prefix, iteration, ctable, reverseUtt, batch_size, debug)
+            self.plotVAEplotly(logdir, prefix, ctable, reverseUtt, batch_size, debug)
         else:
-            self.plotVAEpyplot(wrd_ids, logdir, prefix, iteration, ctable, reverseUtt, batch_size, debug)
+            self.plotVAEpyplot(logdir, prefix, ctable, reverseUtt, batch_size, debug)
 
     def save(self, path):
         self.full.save(path)
@@ -566,7 +576,7 @@ class Segmenter(object):
                     Y,
                     batch_size=batch_size)
 
-    def plot(self, utt_ids, Xs, Xs_mask, Y, logdir, prefix, iteration, batch_size=128):
+    def plot(self, Xs, Xs_mask, Y, logdir, prefix, iteration, batch_size=128):
         ## Initialize plotting objects
         fig = plt.figure()
         fig.set_size_inches(10, 10)
@@ -574,18 +584,18 @@ class Segmenter(object):
         ax_targ = fig.add_subplot(312)
         ax_pred = fig.add_subplot(313)
 
-        inputs_raw = Xs[utt_ids]
-        masks_raw = Xs_mask[utt_ids]
+        inputs_raw = Xs
+        masks_raw = Xs_mask
         preds_raw = self.predict(inputs_raw,
                                  masks_raw,
                                  batch_size)
 
-        targs_raw = np.expand_dims(Y[utt_ids], -1)
+        targs_raw = np.expand_dims(Y, -1)
 
-        for u in range(len(utt_ids)):
+        for u in range(len(Xs)):
             ## Set up plotting canvas
             fig.patch.set_visible(False)
-            fig.suptitle('Utterance %d, Checkpoint %d' % (utt_ids[u], iteration))
+            fig.suptitle('Utterance %d, Checkpoint %d' % (u, iteration))
 
             ## Plot inputs (heatmap)
             inputs = inputs_raw[u]
@@ -618,7 +628,7 @@ class Segmenter(object):
             hm_pred = ax_pred.bar(np.arange(len(preds)), preds)
 
             ## Save plot
-            fig.savefig(logdir + '/barchart_' + prefix + '_utt' + str(utt_ids[u]) + '_iter' + str(iteration) + '.jpg')
+            fig.savefig(logdir + '/barchart_' + prefix + '_utt' + str(u) + '_iter' + str(iteration) + '.jpg')
 
         plt.close(fig)
 
@@ -1006,27 +1016,25 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
     print('Plotting visualizations on cross-validation set')
     if ae_net:
         if nResample:
-            Xae_full, _, _ = XsSeg2Xae(Xs,
-                                       Xs_mask,
-                                       segs4eval,
+            Xae_full, _, _ = XsSeg2Xae(Xs[utt_ids],
+                                       Xs_mask[utt_ids],
+                                       segs4eval[utt_ids],
                                        maxUtt,
                                        maxLen,
                                        nResample=None)
 
-        ae.plotFull(utt_ids,
-                    Xae_full if nResample else Xae,
-                    Yae,
+        ae.plotFull(Xae_full if nResample else Xae[utt_ids],
+                    Yae[utt_ids],
                     logdir,
                     'cv',
                     batch_num,
                     batch_size=batch_size,
-                    Xae_resamp = Xae if nResample else None,
+                    Xae_resamp = Xae[utt_ids] if nResample else None,
                     debug=debug)
 
-    segmenter.plot(utt_ids,
-                   Xs,
-                   Xs_mask,
-                   segs4eval,
+    segmenter.plot(Xs[utt_ids],
+                   Xs_mask[utt_ids],
+                   segs4eval[utt_ids],
                    logdir,
                    'cv',
                    batch_num,

@@ -1,9 +1,11 @@
 from __future__ import print_function, division
 import sys, re, os, math, numpy as np
+from numpy import inf
 from scoring import *
 from data_handling import charSeq2WrdSeq, frameSegs2timeSegs, timeSegs2frameSegs, intervals2ForcedSeg, filterMFCCs, \
 frameInputs2Utts, frameSegs2FrameSegsXUtt, texts2Xs, getMask, reconstructXs
 from echo_words import CharacterTable
+from sampling import sampleSeg, sampleSegs
 
 
 
@@ -17,7 +19,7 @@ from echo_words import CharacterTable
 ##################################################################################
 ##################################################################################
 
-def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, scoreInit=False):
+def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, debug=False, scoreInit=False):
     if not dataDir.endswith('/'):
         dataDir += '/'
     if acoustic:
@@ -43,10 +45,15 @@ def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, s
             FRAME_SIZE = raw[raw.keys()[0]].shape[-1]
         else:
             raw, FRAME_SIZE = readMFCCs(dataDir)
+            mfccs = raw
             raw, total = filterMFCCs(raw, intervals, segs_init, FRAME_SIZE)
             checkpoint['raw'] = raw
             checkpoint['total'] = total
         print('Total speech frames: %s' %total)
+        # for doc in raw:
+        #     print(doc)
+        #     print(len(mfccs[doc]))
+        #     print(intervals[doc][-1])
         if 'gold' in checkpoint:
             gold = checkpoint['gold']
         else:
@@ -79,11 +86,12 @@ def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, s
                 printSegScores(getSegScores(gold['phn'], frameSegs2timeSegs(intervals, segs_init), 0.02, acoustic), True)
                 print()
 
+
     else:
         if 'gold' in checkpoint and 'raw' in checkpoint and 'charset' in checkpoint:
             gold, raw, charset = checkpoint['gold'], checkpoint['raw'], checkpoint['charset']
         else:
-            gold, raw, charset = readTexts(dataDir)
+            gold, raw, charset = readTexts(dataDir, cutoff=inf)
         nChar = sum([len(u) for d in raw for u in raw[d]])
         nWrd = sum([len(w) for d in gold for w in gold[d]])
         meanLen = float(nChar)/nWrd
@@ -91,13 +99,14 @@ def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, s
         print('Corpus length (words):', nWrd)
         print('Mean word length:', meanLen)
 
-        ctable = CharacterTable(charset)
+        if not ctable:
+            ctable = CharacterTable(charset)
 
     doc_list = sorted(list(raw.keys()))
     segsProposal = checkpoint.get('segsProposal', [])
     checkpoint['segsProposal'] = segsProposal
 
-    charDim = FRAME_SIZE if acoustic else len(charset)
+    charDim = FRAME_SIZE if acoustic else ctable.dim()
     doc_list = sorted(list(raw.keys()))
     raw_cts = {}
     for doc in raw:
@@ -135,10 +144,87 @@ def processInputDir(dataDir, checkpoint, maxChar, acoustic=False, debug=False, s
     if acoustic:
         vad = frameSegs2FrameSegsXUtt(vadBreaks, vadBreaks, maxChar, doc_indices)
 
+    if scoreInit:
+        segs4evalXDoc = dict.fromkeys(doc_list)
+
+        if acoustic:
+            if GOLDWRD:
+                prob = float(goldWrdSegCts)/total
+                pSegs = prob * np.ones((len(Xs), maxChar, 1))
+                pSegs[np.where(vad)] = 1.
+                pSegs[np.where(Xs_mask)] = 0.
+                segs = sampleSeg(pSegs, acoustic)
+                for doc in segs4evalXDoc:
+                    s, e = doc_indices[doc]
+                    segs4evalXDoc[doc] = segs[s:e]
+                    if acoustic:
+                        masked_proposal = np.ma.array(segs4evalXDoc[doc], mask=Xs_mask[s:e])
+                        segs4evalXDoc[doc] = masked_proposal.compressed()
+                segs4evalXDoc = frameSegs2timeSegs(intervals, segs4evalXDoc)
+                print('Random segmentations at same rate as gold words:')
+                printSegScores(getSegScores(gold['wrd'], segs4evalXDoc, tol=.03, acoustic=acoustic), acoustic=acoustic)
+                _, goldseg = timeSegs2frameSegs(GOLDWRD)
+                Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+                for doc in segs4evalXDoc:
+                    s, e = doc_indices[doc]
+                    segs4evalXDoc[doc] = Y[s:e]
+                    if acoustic:
+                        masked_proposal = np.ma.array(segs4evalXDoc[doc], mask=Xs_mask[s:e])
+                        segs4evalXDoc[doc] = masked_proposal.compressed()
+                segs4evalXDoc = frameSegs2timeSegs(intervals, segs4evalXDoc)
+                print('Gold word segmentations:')
+                printSegScores(getSegScores(gold['wrd'], segs4evalXDoc, tol=.03, acoustic=acoustic), acoustic=acoustic)
+            if GOLDPHN:
+                prob = float(goldPhnSegCts)/total
+                pSegs = prob * np.ones((len(Xs), maxChar, 1))
+                pSegs[np.where(vad)] = 1.
+                pSegs[np.where(Xs_mask)] = 0.
+                segs = sampleSeg(pSegs, acoustic)
+                for doc in segs4evalXDoc:
+                    s, e = doc_indices[doc]
+                    segs4evalXDoc[doc] = segs[s:e]
+                    if acoustic:
+                        masked_proposal = np.ma.array(segs4evalXDoc[doc], mask=Xs_mask[s:e])
+                        segs4evalXDoc[doc] = masked_proposal.compressed()
+                segs4evalXDoc = frameSegs2timeSegs(intervals, segs4evalXDoc)
+                print('Random segmentations at same rate as gold phones:')
+                printSegScores(getSegScores(gold['phn'], segs4evalXDoc, tol=.02, acoustic=acoustic), acoustic=acoustic)
+                _, goldseg = timeSegs2frameSegs(GOLDPHN)
+                Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+                for doc in segs4evalXDoc:
+                    s, e = doc_indices[doc]
+                    segs4evalXDoc[doc] = Y[s:e]
+                    if acoustic:
+                        masked_proposal = np.ma.array(segs4evalXDoc[doc], mask=Xs_mask[s:e])
+                        segs4evalXDoc[doc] = masked_proposal.compressed()
+                segs4evalXDoc = frameSegs2timeSegs(intervals, segs4evalXDoc)
+                print('Gold phone segmentation')
+                printSegScores(getSegScores(gold['phn'], segs4evalXDoc, tol=.03, acoustic=acoustic), acoustic=acoustic)
+        else:
+            prob = float(1) / meanLen
+            pSegs = prob * np.ones((len(Xs), maxChar, 1))
+            pSegs[:, 0] = 1.
+            pSegs[np.where(Xs_mask)] = 0.
+            segs = sampleSeg(pSegs, acoustic)
+            for doc in segs4evalXDoc:
+                s, e = doc_indices[doc]
+                segs4evalXDoc[doc] = segs[s:e]
+                if acoustic:
+                    masked_proposal = np.ma.array(segs4evalXDoc[doc], mask=Xs_mask[s:e])
+                    segs4evalXDoc[doc] = masked_proposal.compressed()
+            printSegScores(getSegScores(gold, segs4evalXDoc, acoustic=acoustic), acoustic=acoustic)
+
     return doc_indices, doc_list, charDim, raw_total, Xs, Xs_mask, gold, (intervals, vad, vadBreaks, SEGFILE, GOLDWRD, GOLDPHN) if acoustic else ctable
 
-def readText(path):
-    lines = open(path).readlines()
+def readText(path, cutoff=inf):
+    i = 0
+    lines = []
+    with open(path, 'rb') as f:
+        line = f.readline()
+        while line and i < cutoff:
+            lines.append(line)
+            line = f.readline()
+            i += 1
     if any(("||" in li for li in lines)):
         reader = "arpa"
     else:
@@ -168,7 +254,7 @@ def readText(path):
 
     return text, chars, charset
 
-def readTexts(path):
+def readTexts(path, cutoff=inf):
     if not path.endswith('/'):
         path += '/'
     basename = re.compile('.*/(.+)\.txt')
@@ -180,7 +266,7 @@ def readTexts(path):
     charsets = {}
 
     for i in xrange(len(filelist)):
-        text[idlist[i]], chars[idlist[i]], charsets[idlist[i]] = readText(filelist[i])
+        text[idlist[i]], chars[idlist[i]], charsets[idlist[i]] = readText(filelist[i], cutoff)
     charset = list(set.union(*[charsets[d] for d in charsets]))
     return text, chars, charset
 

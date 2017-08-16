@@ -33,9 +33,13 @@ class CharacterTable(object):
             num_rows: Number of rows in the returned one hot encoding. This is
                 used to keep the # of rows for each data the same.
         """
-        X = np.zeros((num_rows, len(self.chars)))
+        # X = np.zeros((num_rows, len(self.chars)))
+        # for i, c in enumerate(C):
+        #     X[i, self.char_indices[c]] = 1
+        # return X
+        X = np.zeros((num_rows, 1), dtype='float32')
         for i, c in enumerate(C):
-            X[i, self.char_indices[c]] = 1
+            X[i, 0] = self.char_indices[c]
         return X
 
     def decode(self, X):

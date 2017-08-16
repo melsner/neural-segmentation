@@ -58,9 +58,9 @@ def testFullAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_in
                                               fitFull=fitFull)
 
         if nResample:
-            Xae_full, _, _ = XsSeg2Xae(Xs,
-                                       Xs_mask,
-                                       Y,
+            Xae_full, _, _ = XsSeg2Xae(Xs[utt_ids],
+                                       Xs_mask[utt_ids],
+                                       Y[utt_ids],
                                        maxUtt,
                                        maxLen,
                                        nResample=None)
@@ -68,9 +68,8 @@ def testFullAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_in
         if segLevel:
             prefix += segLevel
 
-        ae.plotFull(utt_ids,
-                    Xae_full if nResample else Xae,
-                    getYae(Xae, reverseUtt),
+        ae.plotFull(Xae_full if nResample else Xae[utt_ids],
+                    getYae(Xae[utt_ids], reverseUtt),
                     logdir,
                     prefix,
                     i + 1,
@@ -84,10 +83,8 @@ def testFullAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_in
             printReconstruction(utt_ids, ae, Xae, ctable, batch_size, reverseUtt)
 
             if ae.latentDim == 3:
-                ae.plotVAE([15],
-                           logdir,
+                ae.plotVAE(logdir,
                            prefix,
-                           i+1,
                            ctable=ctable,
                            reverseUtt=reverseUtt,
                            batch_size=batch_size,
@@ -154,9 +151,9 @@ def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, u
         Yae = getYae(Xae, reverseUtt)
 
         if nResample:
-            Xae_full, _, _ = XsSeg2XaePhon(Xs,
-                                           Xs_mask,
-                                           Y,
+            Xae_full, _, _ = XsSeg2XaePhon(Xs[utt_ids],
+                                           Xs_mask[utt_ids],
+                                           Y[utt_ids],
                                            maxLen,
                                            nResample=None)
 
@@ -164,14 +161,13 @@ def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, u
         if segLevel:
             prefix += segLevel
 
-        ae.plotPhon(utt_ids,
-                    Xae_full if nResample else Xae,
-                    Yae,
+        ae.plotPhon(Xae_full if nResample else Xae[utt_ids],
+                    Yae[utt_ids],
                     logdir,
                     prefix,
                     i + 1,
                     batch_size,
-                    Xae_resamp=Xae if nResample else None,
+                    Xae_resamp=Xae[utt_ids] if nResample else None,
                     debug=debug)
 
         if not acoustic:
@@ -180,10 +176,8 @@ def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, u
             printReconstruction(utt_ids, ae, Xae, ctable, batch_size, reverseUtt)
 
             if ae.latentDim == 3:
-                ae.plotVAE([15],
-                           logdir,
+                ae.plotVAE(logdir,
                            prefix,
-                           i+1,
                            ctable=ctable,
                            reverseUtt=reverseUtt,
                            batch_size=batch_size,
@@ -196,6 +190,7 @@ def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, u
             print('\t'.join(row), file=f)
 
         t1 = time.time()
+
         print('Iteration time: %.2fs' %(t1-t0))
         print()
 
@@ -281,10 +276,9 @@ def testSegmenterOnFixedSeg(segmenter, Xs, Xs_mask, pSegs, maxChar, doc_indices,
         if segLevel:
             prefix += segLevel
 
-        segmenter.plot(utt_ids,
-                       Xs,
-                       Xs_mask,
-                       Y,
+        segmenter.plot(Xs[utt_ids],
+                       Xs_mask[utt_ids],
+                       Y[utt_ids],
                        logdir,
                        prefix,
                        i+1,
