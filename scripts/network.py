@@ -3,7 +3,7 @@ from keras import backend as K
 from keras.engine.training import _make_batches
 from keras.utils.generic_utils import Progbar
 from keras.engine.training import _slice_arrays
-from keras.models import Model, Sequential
+from keras.models import Model, Sequential, load_model
 from keras import optimizers, metrics
 from keras.layers import *
 from keras import backend as K
@@ -31,9 +31,11 @@ try:
 except:
     usePlotly = False
 import pickle
+import os
+import h5py
 from data_handling import *
-from sampling import *
-from ae_io import *
+from scoring import getSegScores, printSegScores
+from ae_io import writeLog, writeCharSegs, writeTimeSegs
 
 
 
@@ -137,6 +139,64 @@ def masked_categorical_accuracy(y_true, y_pred):
     #accuracy /= (K.mean(mask) + (1e-10*(1-K.mean(mask))))
     return accuracy
 
+def loss_array(y_true, y_pred, fn):
+    return fn(y_true, y_pred)
+
+## Hacked from Keras core code
+def save_optimizer_weights(model, path):
+    with h5py.File(path, 'w') as f:
+        symbolic_weights = getattr(model.optimizer, 'weights')
+        if symbolic_weights:
+            optimizer_weights_group = f.create_group('optimizer_weights')
+            weight_values = K.batch_get_value(symbolic_weights)
+            weight_names = []
+            for i, (w, val) in enumerate(zip(symbolic_weights,
+                                             weight_values)):
+                # Default values of symbolic_weights is /variable
+                # for theano and cntk
+                if K.backend() == 'theano' or K.backend() == 'cntk':
+                    if hasattr(w, 'name'):
+                        if w.name.split('/')[-1] == 'variable':
+                            name = str(w.name) + '_' + str(i)
+                        else:
+                            name = str(w.name)
+                    else:
+                        name = 'param_' + str(i)
+                else:
+                    if hasattr(w, 'name') and w.name:
+                        name = str(w.name)
+                    else:
+                        name = 'param_' + str(i)
+                weight_names.append(name.encode('utf8'))
+            optimizer_weights_group.attrs['weight_names'] = weight_names
+            for name, val in zip(weight_names, weight_values):
+                param_dset = optimizer_weights_group.create_dataset(
+                    name,
+                    val.shape,
+                    dtype=val.dtype)
+                if not val.shape:
+                    # scalar
+                    param_dset[()] = val
+                else:
+                    param_dset[:] = val
+        f.flush()
+
+## Hacked from Keras core code
+def load_optimizer_weights(model, path):
+    with h5py.File(path, 'r') as f:
+        if 'optimizer_weights' in f:
+            optimizer_weights_group = f['optimizer_weights']
+            optimizer_weight_names = [n.decode('utf8') for n in
+                                      optimizer_weights_group.attrs['weight_names']]
+            optimizer_weight_values = [optimizer_weights_group[n] for n in
+                                       optimizer_weight_names]
+            try:
+                model.optimizer.set_weights(optimizer_weight_values)
+            except ValueError:
+                warnings.warn('Error in loading the saved optimizer '
+                              'state. As a result, your model is '
+                              'starting with a freshly initialized '
+                              'optimizer.')
 
 
 
@@ -151,7 +211,8 @@ def masked_categorical_accuracy(y_true, y_pred):
 
 class AE(object):
     def __init__(self, ae_full, ae_utt=None, ae_phon=None, embed_word=None, embed_words=None, embed_words_reconst=None,
-                 word_decoder=None, words_decoder=None, latentDim=None):
+                 word_decoder=None, words_decoder=None, loss_tensor=None, latentDim=None, charDropout=None,
+                 wordDropout=None, fitType=None):
         self.full = ae_full
         self.utt = ae_utt
         self.phon = ae_phon
@@ -160,49 +221,71 @@ class AE(object):
         self.embed_words_reconst = embed_words_reconst
         self.word_decoder = word_decoder
         self.words_decoder = words_decoder
+        self.loss_tensor = loss_tensor
         self.latentDim = latentDim
+        self.charDropout = charDropout
+        self.wordDropout = wordDropout
+        self.fitType = fitType
+        self.fitFull = fitType in ['full', 'both']
+        self.fitParts = fitType in ['parts', 'both']
 
-    def decode_word(self, input, batch_size=128):
-        return self.word_decoder.predict(input, batch_size=batch_size)
+    def decode_word(self, input, batch_size=128, verbose=0):
+        return self.word_decoder.predict(input, batch_size=batch_size, verbose=verbose)
 
-    def decode_words(self, input, batch_size=128):
-        return self.words_decoder.predict(input, batch_size=batch_size)
+    def decode_words(self, input, batch_size=128, verbose=0):
+        return self.words_decoder.predict(input, batch_size=batch_size, verbose=verbose)
 
     ## Faster but more memory intensive
-    def predictA(self, input, batch_size=128):
-        return self.full.predict(input, batch_size=batch_size)
+    def predictA(self, input, batch_size=128, verbose=0):
+        return self.full.predict(input, batch_size=batch_size, verbose=verbose)
 
     ## Slower but more memory efficient
-    def predictB(self, input, batch_size=128):
-        output = self.embed_words(input, learning_phase=0, batch_size=batch_size)
-        output = self.utt.predict(output, batch_size=batch_size)
-        output = self.decode_words([output, input], batch_size=batch_size)
+    def predictB(self, input, batch_size=128, verbose=0):
+        output = self.embed_words(input, learning_phase=0, batch_size=batch_size, verbose=verbose)
+        output = self.utt.predict(output, batch_size=batch_size, verbose=verbose)
+        output = self.decode_words([output, input], batch_size=batch_size, verbose=verbose)
         return output
 
-    def predict(self, input, batch_size=128):
-        return self.predictB(input, batch_size)
+    def predict(self, input, batch_size=128, verbose=0):
+        if self.fitType == 'full':
+            ## fitType 'full' requires version A because the utterance model doesn't auto-encode
+            return self.predictA(input, batch_size, verbose=verbose)
+        return self.predictB(input, batch_size, verbose=verbose)
 
     ## Faster but more memory intensive
-    def evaluateA(self, input, target, batch_size=128):
-        eval = self.full.evaluate(input, target, batch_size=128, verbose=0)
+    def evaluateA(self, input, target, batch_size=128, verbose=0):
+        if verbose != 0:
+            print('Encoding/decoding full input')
+        eval = self.full.evaluate(input, target, batch_size=batch_size, verbose=verbose)
         if type(eval) is not list:
             eval = [eval]
         return eval
 
     ## Slower but more memory efficient
-    def evaluateB(self, input, target, batch_size=128):
-        output = self.embed_words(input, learning_phase=0, batch_size=batch_size)
-        output = self.utt.predict(output, batch_size=batch_size)
-        output = self.words_decoder.evaluate([output, input], target, batch_size=batch_size, verbose=0)
+    def evaluateB(self, input, target, batch_size=128, verbose=0):
+        if verbose != 0:
+            print('Encoding words')
+        output = self.embed_words(input, learning_phase=0, batch_size=batch_size, verbose=verbose)
+        if verbose != 0:
+            print('Encoding/decoding utterance')
+        output = self.utt.predict(output, batch_size=batch_size, verbose=verbose)
+        if verbose != 0:
+            print('Decoding utterance')
+        output = self.words_decoder.evaluate([output, input], target, batch_size=batch_size, verbose=verbose)
         if type(output) is not list:
             output = [output]
         return output
 
-    def evaluate(self, input, target, batch_size=128):
-        return self.evaluateB(input, target, batch_size)
+    def evaluate(self, input, target, batch_size=128, verbose=0):
+        if self.fitType == 'full':
+            ## fitType 'full' requires version A because the utterance model doesn't auto-encode
+            return self.evaluateA(input, target, batch_size, verbose=verbose)
+        return self.evaluateB(input, target, batch_size, verbose=verbose)
 
     def update(self, Xs, Xs_mask, segs, maxUtt, maxLen, reverseUtt=False, batch_size=128,
                  nResample=None, nEpoch=1, fitParts=True, fitFull=True, verbose=True):
+        if verbose:
+            print('Segmenting input sequence for full AE')
         Xae_full, deletedChars_full, oneLetter_full = XsSeg2Xae(Xs,
                                                                 Xs_mask,
                                                                 segs,
@@ -213,6 +296,8 @@ class AE(object):
 
         if fitParts:
             ## Train phonological AE
+            if verbose:
+                print('Segmenting input sequence for phon AE')
             Xae_wrds, deletedChars_wrds, oneLetter_wrds = XsSeg2XaePhon(Xs,
                                                                         Xs_mask,
                                                                         segs,
@@ -231,10 +316,17 @@ class AE(object):
                           verbose=int(verbose))
 
             ## Extract input word embeddings
-            Xae_utt = self.embed_words(Xae_full, learning_phase=1, batch_size=batch_size)
+            if verbose:
+                print('Getting input word embeddings (dropout on)')
+            Xae_utt = self.embed_words(Xae_full, learning_phase=1, batch_size=batch_size, verbose=int(verbose))
 
             ## Extract target word embeddings
-            Yae_utt = self.embed_words(Xae_full, learning_phase=0, batch_size=batch_size)
+            if self.charDropout != 0 or self.wordDropout != 0:
+                if verbose:
+                    print('Getting target word embeddings (dropout off)')
+                Yae_utt = self.embed_words(Xae_full, learning_phase=0, batch_size=batch_size, verbose=int(verbose))
+            else:
+                Yae_utt = Xae_utt
             Yae_utt = getYae(Yae_utt, reverseUtt)
 
             # ## Debugging printouts
@@ -259,7 +351,7 @@ class AE(object):
                          Yae_utt,
                          shuffle=True,
                          batch_size=batch_size,
-                         epochs=10*nEpoch, # Utt AE gets fewer training samples than Phon AE, so we train more
+                         epochs=1*nEpoch, # Utt AE gets fewer training samples than Phon AE, so we train more
                          verbose=int(verbose))
 
         if fitFull:
@@ -272,12 +364,23 @@ class AE(object):
                           epochs=nEpoch,
                           verbose=int(verbose))
 
-        eval = self.evaluate(Xae_full, Yae_full, batch_size)
+        if verbose:
+            print('Evaluating full auto-encoder network')
+        eval = self.evaluate(Xae_full, Yae_full, batch_size, verbose=int(verbose))
 
         if verbose:
             print('Full AE network loss: %.4f' % eval[0])
             if len(eval) > 1:
                 print('Full AE network accuracy: %.4f' % eval[1])
+
+        # if verbose:
+        #     print('Evaluating full auto-encoder network')
+        # eval = self.evaluateA(Xae_full, Yae_full, batch_size, verbose=int(verbose))
+        #
+        # if verbose:
+        #     print('Full AE network loss: %.4f' % eval[0])
+        #     if len(eval) > 1:
+        #         print('Full AE network accuracy: %.4f' % eval[1])
 
         return Xae_full, deletedChars_full, oneLetter_full, eval
 
@@ -319,28 +422,26 @@ class AE(object):
         fig = plt.figure()
         fig.set_size_inches(10, 10)
         inputs_src_raw = Xae
-        if not Xae_resamp is None:
-            ax_input = fig.add_subplot(511)
-            ax_input_resamp = fig.add_subplot(512)
-            ax_targ = fig.add_subplot(513)
-            ax_mean = fig.add_subplot(514)
-            ax_pred = fig.add_subplot(515)
+        if Xae_resamp is not None:
+            ax_input = fig.add_subplot(411)
+            ax_input_resamp = fig.add_subplot(412)
+            ax_targ = fig.add_subplot(413)
+            ax_pred = fig.add_subplot(414)
             inputs_resamp_raw = Xae_resamp
             preds_raw = self.predict(inputs_resamp_raw, batch_size=batch_size)
+            if inputs_resamp_raw.shape[-1] == 1:
+                inputs_resamp_raw = oneHot(inputs_resamp_raw, preds_raw.shape[-1])
         else:
-            ax_input = fig.add_subplot(411)
-            ax_targ = fig.add_subplot(412)
-            ax_mean = fig.add_subplot(413)
-            ax_pred = fig.add_subplot(414)
+            ax_input = fig.add_subplot(311)
+            ax_targ = fig.add_subplot(312)
+            ax_pred = fig.add_subplot(313)
             inputs_src_raw = Xae
             preds_raw = self.predict(inputs_src_raw, batch_size=batch_size)
         targs_raw = Yae
-
-        ## Plot target global mean
-        mean = np.expand_dims(np.mean(Yae, axis=(0, 1, 2)), -1)
-        ax_mean.axis('off')
-        ax_mean.set_title('Target mean', loc='left')
-        hm_mean = ax_mean.pcolor(mean, cmap=plt.cm.Blues)
+        if inputs_src_raw.shape[-1] == 1:
+            inputs_src_raw = oneHot(inputs_src_raw, preds_raw.shape[-1])
+        if targs_raw.shape[-1] == 1:
+            targs_raw = oneHot(targs_raw, preds_raw.shape[-1])
 
         for u in range(len(Xae)):
             ## Set up plotting canvas
@@ -411,26 +512,24 @@ class AE(object):
         fig.set_size_inches(10, 10)
         inputs_src_raw = Xae
         if not Xae_resamp is None:
-            ax_input = fig.add_subplot(511)
-            ax_input_resamp = fig.add_subplot(512)
-            ax_targ = fig.add_subplot(513)
-            ax_mean = fig.add_subplot(514)
-            ax_pred = fig.add_subplot(515)
+            ax_input = fig.add_subplot(411)
+            ax_input_resamp = fig.add_subplot(412)
+            ax_targ = fig.add_subplot(413)
+            ax_pred = fig.add_subplot(414)
             inputs_resamp_raw = Xae_resamp
             preds_raw = self.phon.predict(inputs_resamp_raw, batch_size=batch_size)
+            if inputs_resamp_raw.shape[-1] == 1:
+                inputs_resamp_raw = oneHot(inputs_resamp_raw, preds_raw.shape[-1])
         else:
-            ax_input = fig.add_subplot(411)
-            ax_targ = fig.add_subplot(412)
-            ax_mean = fig.add_subplot(413)
-            ax_pred = fig.add_subplot(414)
+            ax_input = fig.add_subplot(311)
+            ax_targ = fig.add_subplot(312)
+            ax_pred = fig.add_subplot(313)
             preds_raw = self.phon.predict(inputs_src_raw, batch_size=batch_size)
         targs_raw = Yae
-
-        ## Plot target global mean
-        mean = np.expand_dims(np.mean(Yae, axis=(0, 1)), -1)
-        ax_mean.axis('off')
-        ax_mean.set_title('Target global mean', loc='left')
-        hm_mean = ax_mean.pcolor(mean, cmap=plt.cm.Blues)
+        if inputs_src_raw.shape[-1] == 1:
+            inputs_src_raw = oneHot(inputs_src_raw, preds_raw.shape[-1])
+        if targs_raw.shape[-1] == 1:
+            targs_raw = oneHot(targs_raw, preds_raw.shape[-1])
 
         if debug:
             print('=' * 50)
@@ -488,11 +587,11 @@ class AE(object):
 
         ticks = [[-1,-0.5,0,0.5,1]]*self.latentDim
         samplePoints = np.array(np.meshgrid(*ticks)).T.reshape(-1,3)
-        input_placeholder = np.ones(tuple([len(samplePoints)] + list(self.phon.output_shape[1:])))
+        input_placeholder = np.ones(tuple([len(samplePoints)] + list(self.phon.output_shape[1:-1]) + [1]))
         preds = self.decode_word([samplePoints, input_placeholder], batch_size=batch_size)
         if reverseUtt:
             preds = getYae(preds, reverseUtt)
-        reconstructed = reconstructXae(preds, ctable, maxLen=5)
+        reconstructed = reconstructXae(np.expand_dims(preds.argmax(-1), -1), ctable, maxLen=5)
         for i in range(len(samplePoints)):
             ax.text(samplePoints[i,0], samplePoints[i,1], samplePoints[i,2], reconstructed[i])
         ax.set_xlim3d(-1, 1)
@@ -503,13 +602,13 @@ class AE(object):
         plt.close(fig)
 
     def plotVAEplotly(self, logdir, prefix, ctable=None, reverseUtt=False, batch_size=128, debug=False):
-        ticks = [[-2,-1,0,1,2]]*self.latentDim
+        ticks = [[-1,-0.5,0,0.5,1]]*self.latentDim
         samplePoints = np.array(np.meshgrid(*ticks)).T.reshape(-1,3)
-        input_placeholder = np.ones(tuple([len(samplePoints)] + list(self.phon.output_shape[1:])))
+        input_placeholder = np.ones(tuple([len(samplePoints)] + list(self.phon.output_shape[1:-1]) + [1]))
         preds = self.decode_word([samplePoints, input_placeholder], batch_size=batch_size)
         if reverseUtt:
             preds = getYae(preds, reverseUtt)
-        reconstructed = reconstructXae(preds, ctable, maxLen=5)
+        reconstructed = reconstructXae(np.expand_dims(preds.argmax(-1), -1), ctable, maxLen=5)
 
         data = [go.Scatter3d(
             x = samplePoints[:,0],
@@ -528,18 +627,50 @@ class AE(object):
         else:
             self.plotVAEpyplot(logdir, prefix, ctable, reverseUtt, batch_size, debug)
 
-    def save(self, path):
-        self.full.save(path)
+    def save(self, path, suffix=''):
+        full_path = path+'/ae'+suffix+'.h5'
+        self.full.save(full_path)
+        if self.fitParts:
+            phonOptimPath = path + '/ae_phon_optim' + suffix + '.h5'
+            save_optimizer_weights(self.phon, phonOptimPath)
+            uttOptimPath = path + '/ae_utt_optim' + suffix + '.h5'
+            save_optimizer_weights(self.utt, uttOptimPath)
 
-    def load(self, path):
-        self.full.load_weights(path, by_name=True)
+    def load(self, path, suffix=''):
+        fullPath = path+'/ae'+suffix+'.h5'
+        success = True
+        if os.path.exists(fullPath):
+            self.full.load_weights(fullPath, by_name=True)
+            if self.fitFull:
+                load_optimizer_weights(self.full, fullPath)
+            if self.fitParts:
+                phonOptimPath = path+'/ae_phon_optim'+suffix+'.h5'
+                if os.path.exists(phonOptimPath):
+                    print('Phon AE optimizer checkpoint found. Loading weights.')
+                    load_optimizer_weights(self.phon, phonOptimPath)
+                else:
+                    print('No phon AE optimizer checkpoint found. Using default initialization.')
+                    success = False
+                uttOptimPath = path+'/ae_utt_optim'+suffix+'.h5'
+                if os.path.exists(uttOptimPath):
+                    print('Utt AE optimizer checkpoint found. Loading weights.')
+                    load_optimizer_weights(self.utt, uttOptimPath)
+                else:
+                    print('No utt AE optimizer checkpoint found. Using default initialization.')
+                    success = False
+        else:
+            print('No AE checkpoint found. Using default initialization.')
+            success = False
+
+        return success
 
 
 
 class Segmenter(object):
-    def __init__(self, segmenter, seg_shift):
+    def __init__(self, segmenter, seg_shift=0, charDim=None):
         self.network = segmenter
         self.seg_shift = seg_shift
+        self.charDim = charDim
 
     def update(self, Xs, Xs_mask, targets, batch_size=128):
         seg_shift = self.seg_shift
@@ -590,6 +721,8 @@ class Segmenter(object):
                                  masks_raw,
                                  batch_size)
 
+        if inputs_raw.shape[-1] == 1 and self.charDim:
+            inputs_raw = oneHot(inputs_raw, self.charDim)
         targs_raw = np.expand_dims(Y, -1)
 
         for u in range(len(Xs)):
@@ -632,11 +765,20 @@ class Segmenter(object):
 
         plt.close(fig)
 
-    def save(self, path):
+    def save(self, path, suffix=''):
+        path = path+'/seg'+suffix+'.h5'
         self.network.save(path)
 
-    def load(self, path):
-        self.network.load_weights(path, by_name=True)
+    def load(self, path, suffix=''):
+        path = path+'/seg'+suffix+'.h5'
+        if os.path.exists(path):
+            print('Segmenter checkpoint found. Loading weights.')
+            self.network.load_weights(path, by_name=True)
+            load_optimizer_weights(self.network, path)
+            return True
+        else:
+            print('No segmenter checkpoint found. Using default initialization.')
+            return False
 
 
 
@@ -1010,7 +1152,7 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
     else:
         print('Writing solutions to file')
         printSegScores(getSegScores(gold, segs4evalXDoc, acoustic), acoustic)
-        # writeSolutions(logdir, segs4evalXDoc[doc_list[0]], gold[doc_list[0]], batch_num, filename='seg_cv.txt')
+        # writeCharSegs(logdir, segs4evalXDoc[doc_list[0]], gold[doc_list[0]], batch_num, filename='seg_cv.txt')
 
     print()
     print('Plotting visualizations on cross-validation set')

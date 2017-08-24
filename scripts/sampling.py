@@ -1,7 +1,7 @@
 import sys, numpy as np
 from numpy import ma, inf, nan
-from scipy.signal import argrelmax, argrelmin
-from data_handling import XsSeg2Xae, getYae
+from data_handling import XsSeg2Xae, getYae, pSegs2Segs
+from network import sparse_xent
 
 
 
@@ -23,81 +23,6 @@ def getRandomPermutation(n):
 
 
 
-##################################################################################
-##################################################################################
-##
-##  METHODS FOR EXTRACTING SEGMENTATIONS
-##
-##################################################################################
-##################################################################################
-
-def sampleSeg(pSegs, acoustic=False, resamplePSegs=False, concentration=10):
-    if resamplePSegs:
-        smp = np.zeros_like(pSegs)
-        for i in range(len(pSegs)):
-            for j in range(len(pSegs[i])):
-                if pSegs[i,j,0] > 0 and pSegs[i,j,0] < 1:
-                    smp[i,j,0] = np.random.beta(pSegs[i,j,0]*concentration, (1-pSegs[i,j,0])*concentration)
-        segs = pSegs2Segs(smp, acoustic=acoustic)
-    else:
-        smp = np.random.uniform(size=pSegs.shape)
-        segs = smp < pSegs
-    return segs
-
-def sampleSegs(pSegs, acoustic=False, resamplePSegs=False):
-    segs = dict.fromkeys(pSegs)
-    for doc in pSegs:
-        segs[doc] = sampleSeg(pSegs[doc], acoustic, resamplePSegs)
-    return segs
-
-def pSegs2Segs(pSegs, acoustic=False, threshold=0.1, implementation='delta'):
-    if acoustic:
-        if implementation == 'delta':
-            return relMaxWithDelta(pSegs, threshold)
-        else:
-            padding = [(0, 0) for d in range(len(pSegs.shape))]
-            padding[1] = (1, 1)
-            pSegs_padded = np.pad(pSegs, padding, 'constant', constant_values=0.)
-            pSegs_padded[pSegs_padded < threshold] = 0
-            segs = np.zeros_like(pSegs_padded)
-            segs[argrelmax(pSegs_padded, 1)] = 1
-            return segs[:, 1:-1, :]
-    else:
-        return pSegs > 0.5
-
-def relMaxWithDelta(pSegs, threshold=0.1):
-    segs = np.zeros_like(pSegs)
-    for i in range(len(pSegs)):
-        min = max = 0
-        delta_left = delta_right = False
-        argMax = 0
-        contour = np.pad(np.squeeze(pSegs[i], -1), (0,1), 'constant', constant_values=0)
-        # print(contour)
-        for t in range(len(contour)):
-            cur = contour[t]
-            if cur > max:
-                max = cur
-                argMax = t
-            if not delta_left:
-                delta_left = max - min > threshold
-            if delta_left and not delta_right:
-                delta_right = max-cur > threshold
-            if delta_right:
-                segs[i, argMax, 0] = 1
-            if delta_right or cur < min:
-                min = max = cur
-                delta_left = delta_right = False
-                argMax = t
-            # print(delta_left)
-            # print(delta_right)
-            # print(min)
-            # print(max)
-            # print('')
-    return segs
-
-
-
-
 
 ##################################################################################
 ##################################################################################
@@ -108,9 +33,9 @@ def relMaxWithDelta(pSegs, threshold=0.1):
 ##################################################################################
 
 def scoreXUtt(ae, Xs, Xs_mask, segs, maxUtt, maxLen, logdir,
-              reverseUtt=False, batch_size=128, nResample=None, metric='logprob', agg='mean', train=False):
+              reverseUtt=False, batch_size=128, nResample=None, agg='mean', train=False):
     if train:
-        ae.save(logdir + '/ae_tmp.h5')
+        ae.save(logdir, suffix='_tmp')
         Xae, deletedChars, oneLetter, eval = ae.update(Xs, Xs_mask, segs, maxUtt, maxLen, verbose=False)
     else:
         Xae, deletedChars, oneLetter = XsSeg2Xae(Xs,
@@ -122,65 +47,22 @@ def scoreXUtt(ae, Xs, Xs_mask, segs, maxUtt, maxLen, logdir,
 
     Yae = getYae(Xae, reverseUtt)
 
-    preds = ae.predict(Xae, batch_size=batch_size)
-    
     if train:
-        ae.load(logdir + '/ae_tmp.h5')
+        ae.load(logdir, suffix='_tmp')
 
-    if metric == "logprob":
+    score = -ae.loss_tensor([Xae, Yae], batch_size=batch_size)
+    score = score * Yae.any(-1)
+    if agg == 'mean':
+        score[score == 0] = nan
         with np.errstate(divide='ignore'):
-            score = np.nan_to_num(np.log(preds))
-        score = score * Yae
-
-        ## Zero-out scores for padding chars
-        score = score * (np.expand_dims(Yae.argmax(-1), -1) > 0).any(-1, keepdims=True)
-
-        ## Aggregate losses within each word
-        if agg == 'mean':
-            score = score.sum(-1)
-            score[score==0] = nan
-            with np.errstate(divide='ignore'):
-                score = np.nan_to_num(np.nanmean(score, axis=-1))
-        elif agg == 'sum':
-            score = score.sum(axis=(2,3))
-        else:
-            raise ValueError('''The aggregation function you have requested ("%s") is not supported.
-                                Supported aggregators are "mean" and "sum".''' % agg)
-        if reverseUtt:
-            score = np.flip(score, 1)
-    elif metric == 'logprobbinary':
-        with np.errstate(divide='ignore'):
-            score = np.nan_to_num(np.log(preds)) * Yae + np.nan_to_num(np.log(1-preds)) * (1-Yae)
-
-        ## Zero-out scores for padding chars
-        score = score * (np.expand_dims(Xae.argmax(-1), -1) > 0).any(-1, keepdims=True)
-        score = np.expand_dims(score.sum(axis=(1,2)), -1)
-    elif metric == 'mse':
-        ## Initialize score as negative squared error
-        score = -((preds - Yae) ** 2)
-
-        ## Zero-out scores for padding chars
-        score *= Yae.any(-1, keepdims=True)
-
-        ## Get MSE per character
-        score = score.mean(-1)
-
-        ## Aggregate losses within each word
-        if agg == 'mean':
-            score[score==0] = nan
-            score = np.nanmean(score, axis=-1)
-        elif agg == 'sum:':
-            score = score.sum(-1)
-        else:
-            raise ValueError('''The aggregation function you have requested ("%s") is not supported.
-                                    Supported aggregators are "mean" and "sum".''' % agg)
-        if reverseUtt:
-            score = np.flip(score, 1)
+            score = np.nan_to_num(np.nanmean(score, axis=-1))
+    elif agg== 'sum':
+        score = score.sum(-1)
     else:
-        raise ValueError('''The loss metric you have requested ("%s") is not supported.
-                            Supported metrics are "logprob" and "mse".''' %metric)
-
+        raise ValueError('''The aggregation function you have requested ("%s") is not supported.
+                            Supported aggregators are "mean" and "sum".''' % agg)
     return score, Xae, deletedChars, oneLetter
+
 
 def importanceWeights(scores, segs, Xs_mask, annealer, local=True):
     if local:
@@ -287,6 +169,9 @@ class Lattice(object):
     def __init__(self):
         self.nodes = {}
         self.edges = {}
+        self.uttLenChar = None
+        self.bestpath = None
+        self.bestscore = None
 
     def __str__(self):
         string = 'Nodes:\n'
@@ -295,6 +180,12 @@ class Lattice(object):
         string += '\nEdges:\n'
         for e in self.edges:
             string += str(self.edges[e]) + '\n'
+        if self.bestpath:
+            string += '\nBest path:\n'
+            for n in self.bestpath:
+                string += str(n) + '\n'
+        if self.bestscore is not None:
+            string += '\nBest score: %.4f\n' %self.bestscore
         return string
 
     def addNode(self, key):
@@ -302,6 +193,10 @@ class Lattice(object):
             self.nodes[key] = Node(key)
 
     def addEdge(self, a, b, wt):
+        if not isinstance(a, Node):
+            a = self.nodes[a]
+        if not isinstance(b, Node):
+            b = self.nodes[b]
         key = (a,b)
         if key in self.edges:
             if self.edges[key].wt < wt:
@@ -314,6 +209,53 @@ class Lattice(object):
         if a == b:
             return 0
         return self.edges[(a,b)].wt
+
+    def score(self, score, wLen, maxLen, delWt, oneLetterWt, segWt):
+        score -= max(0, wLen-maxLen) * delWt
+        score -= (wLen==1) * oneLetterWt
+        # if wLen > 0:
+        #     ## Penalize segmentations by adding setWt additional characters to the loss
+        #     segPenalty = score / wLen
+        #     score -= segWt*segPenalty
+        #     print(segPenalty)
+        #     raw_input()
+        score -= segWt
+        return score
+
+    def buildFromSegs(self, segs, wts, seg_mask=None, maxLen=inf, delWt=0, oneLetterWt=0, segWt=0):
+        assert len(segs) == len(wts), 'Segmentation and score matrices have different numbers of samples (%d and %d respectively)' %(len(segs), len(wts))
+        if seg_mask is not None:
+            self.uttLenChar = segs.shape[1] - seg_mask.sum()
+        self.addNode('start')
+        self.addNode('end')
+        for s in range(len(segs)):
+            last = 'start'
+            seg = segs[s]
+            wt = wts[s]
+            wt = wt[wt < 0]
+            uttLenWrd = len(wt)
+            if segs[s,0] == 1:
+                self.addNode(0)
+                self.addEdge('start', 0, 0)
+                last = 0
+                t = 1
+            else:
+                t = 0
+            w = 0
+            assert uttLenWrd <= 64, str(uttLenWrd)
+            while t < self.uttLenChar and w < uttLenWrd:
+                if seg[t] == 1:
+                    self.addNode(t)
+                    wLen = t-last if last != 'start' else t
+                    score = self.score(wt[w], wLen, maxLen, delWt, oneLetterWt, segWt)
+                    self.addEdge(last, t, score)
+                    last = t
+                    w += 1
+                t += 1
+            t = self.uttLenChar
+            wLen = t - last if last != 'start' else t
+            score = self.score(wt[w] if w < uttLenWrd else delWt*min(wLen,maxLen), wLen, maxLen, delWt, oneLetterWt, segWt)
+            self.addEdge(last, 'end', score)
 
     def dijkstra(self):
         Q = set(self.nodes.values())
@@ -344,89 +286,22 @@ class Lattice(object):
                     v.score = score
                     v.prev = u
         segseq = []
-        #print(self)
-        finalscore = u.score
-        #print(finalscore)
+        bestscore = u.score
         while u.prev != None:
             u = u.prev
             if u.t != 'start':
                 segseq.insert(0, u.t)
-        #print(segseq)
-        #raw_input()
-        return segseq, finalscore
-
-def getViterbiWordScore(score, wLen, maxLen, delWt, oneLetterWt, segWt):
-    score -= max(0, wLen-maxLen) * delWt
-    score -= (wLen==1) * oneLetterWt
-    # if wLen > 0:
-    #     ## Penalize segmentations by adding setWt additional characters to the loss
-    #     segPenalty = score / wLen
-    #     score -= segWt*segPenalty
-    #     print(segPenalty)
-    #     raw_input()
-    score -= segWt
-    return score
+        self.bestpath = segseq
+        self.bestscore = bestscore
+        return segseq, bestscore
 
 def viterbiDecode(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt):
-    uttLen = segs.shape[1] - Xs_mask.sum()
-
-    ## Construct lattice
-    lattice = Lattice()
-    lattice.addNode('start')
-    lattice.addNode('end')
-
-    for s in range(segs.shape[0]):
-        src = lattice.nodes['start']
-        src_t = -inf
-        w = -1
-        ## Scan to get the index of the first real word score
-        while w < scores.shape[1]-1 and scores[s,w+1] == 0.:
-            w += 1
-        w += int(segs[s][0] == 0)
-        #print(w)
-        t = 0
-        while t <= segs.shape[1]:
-            if t < segs.shape[1] and w < scores.shape[1]-1:
-                seg = segs[s,t]
-                label = t
-            else:
-                t = uttLen
-                seg = 1
-                label = 'end'
-            if seg == 1:
-                lattice.addNode(label)
-                dest = lattice.nodes[label]
-                if w >= 0:
-                    wt = scores[s, w]
-                    wLen = min(t,uttLen) - max(0,src_t)
-                    wt = getViterbiWordScore(wt, wLen, maxLen, delWt, oneLetterWt, segWt) # * wLen/uttLen # scale loss by character
-                    #print(t, wLen, src_t, wt, scores[s,w])
-                    #raw_input()
-                else:
-                    wt = 0
-                lattice.addEdge(src, dest, wt)
-                w += 1
-                src = dest
-                src_t = src.t
-                ## Handle case when we have reached maxUtt
-                if src_t == 'end':
-                    break
-            t += 1
-
-    ## Shortest path
+    l = Lattice()
+    l.buildFromSegs(segs, scores, Xs_mask, maxLen, delWt, oneLetterWt, segWt)
+    segseq, finalscore = l.dijkstra()
     segsOut = np.zeros((segs.shape[1]))
-    segseq, finalscore = lattice.dijkstra()
-    finalscore /= uttLen
+    finalscore /= l.uttLenChar
     segsOut[segseq] = 1
-
-    # print('')
-    # print(segs)
-    # print(scores)
-    # print(lattice)
-    # print(segseq)
-    # print(segsOut)
-    # print(finalscore)
-    # raw_input()
 
     return segsOut, finalscore
 

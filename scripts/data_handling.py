@@ -1,8 +1,8 @@
 from __future__ import print_function, division
 import sys, re, numpy as np
-from scipy.signal import resample
-from echo_words import CharacterTable, pad
+from scipy.signal import resample, argrelmax
 from numpy import inf
+from echo_words import CharacterTable, pad
 
 
 
@@ -19,6 +19,70 @@ from numpy import inf
 def segs2pSegs(segs, interpolationRate=0.1):
     return (1-interpolationRate) * segs + interpolationRate * 0.5 * np.ones_like(segs)
 
+def sampleSeg(pSegs, acoustic=False, resamplePSegs=False, concentration=10):
+    if resamplePSegs:
+        smp = np.zeros_like(pSegs)
+        for i in range(len(pSegs)):
+            for j in range(len(pSegs[i])):
+                if pSegs[i,j,0] > 0 and pSegs[i,j,0] < 1:
+                    smp[i,j,0] = np.random.beta(pSegs[i,j,0]*concentration, (1-pSegs[i,j,0])*concentration)
+        segs = pSegs2Segs(smp, acoustic=acoustic)
+    else:
+        smp = np.random.uniform(size=pSegs.shape)
+        segs = smp < pSegs
+    return segs
+
+def sampleSegs(pSegs, acoustic=False, resamplePSegs=False):
+    segs = dict.fromkeys(pSegs)
+    for doc in pSegs:
+        segs[doc] = sampleSeg(pSegs[doc], acoustic, resamplePSegs)
+    return segs
+
+def pSegs2Segs(pSegs, acoustic=False, threshold=0.1, implementation='delta'):
+    if acoustic:
+        if implementation == 'delta':
+            return relMaxWithDelta(pSegs, threshold)
+        else:
+            padding = [(0, 0) for d in range(len(pSegs.shape))]
+            padding[1] = (1, 1)
+            pSegs_padded = np.pad(pSegs, padding, 'constant', constant_values=0.)
+            pSegs_padded[pSegs_padded < threshold] = 0
+            segs = np.zeros_like(pSegs_padded)
+            segs[argrelmax(pSegs_padded, 1)] = 1
+            return segs[:, 1:-1, :]
+    else:
+        return pSegs > 0.5
+
+def relMaxWithDelta(pSegs, threshold=0.1):
+    segs = np.zeros_like(pSegs)
+    for i in range(len(pSegs)):
+        min = max = 0
+        delta_left = delta_right = False
+        argMax = 0
+        contour = np.pad(np.squeeze(pSegs[i], -1), (0,1), 'constant', constant_values=0)
+        # print(contour)
+        for t in range(len(contour)):
+            cur = contour[t]
+            if cur > max:
+                max = cur
+                argMax = t
+            if not delta_left:
+                delta_left = max - min > threshold
+            if delta_left and not delta_right:
+                delta_right = max-cur > threshold
+            if delta_right:
+                segs[i, argMax, 0] = 1
+            if delta_right or cur < min:
+                min = max = cur
+                delta_left = delta_right = False
+                argMax = t
+            # print(delta_left)
+            # print(delta_right)
+            # print(min)
+            # print(max)
+            # print('')
+    return segs
+
 def getMask(segmented):
     return np.squeeze(np.logical_not(segmented.any(-1, keepdims=True)), -1)
 
@@ -27,6 +91,13 @@ def getMasks(segmented):
     for doc in masks:
         masks[doc] = getMask(segmented[doc])
     return masks
+
+def oneHot(x, n, padCharId = 0):
+    if x.shape[-1] == 1:
+        x = np.squeeze(x, -1)
+    out = np.equal.outer(x, np.arange(n))
+    out[...,padCharId] = 0
+    return out
 
 def XsSeg2XaePhon(Xs, Xs_mask, segs, maxLen, nResample=None):
     Xae = np.split(Xs, len(Xs))

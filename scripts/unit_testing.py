@@ -34,7 +34,7 @@ def testFullAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_in
     print()
     print('Unit testing full auto-encoder on fixed %s segmentation' % ('gold' if gold != None else 'random'))
     ## Re-initialize network weights in case any training has already happened
-    ae.load(logdir + '/ae_init.h5')
+    ae.load(logdir, suffix='_init')
 
     logfile = logdir + '/log_fixedfull_' + segLevel + '.txt'
     headers = ['Iteration', 'AEFullLoss']
@@ -127,7 +127,7 @@ def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, u
     print()
     print('Unit testing phonological auto-encoder on fixed %s segmentation' % ('gold' if gold is not None else 'random'))
     ## Re-initialize network weights in case any training has already happened
-    ae.load(logdir + '/ae_init.h5')
+    ae.load(logdir, suffix='_init')
 
     logfile = logdir + '/log_fixedphon_' + segLevel + '.txt'
     headers = ['Iteration', 'AEPhonLoss']
@@ -225,7 +225,7 @@ def testSegmenterOnFixedSeg(segmenter, Xs, Xs_mask, pSegs, maxChar, doc_indices,
     targetsXDoc = dict.fromkeys(doc_indices)
 
     ## Re-initialize network weights in case any training has already happened
-    segmenter.load(logdir + '/segmenter_init.h5')
+    segmenter.load(logdir, suffix='_init')
 
     for i in range(trainIters):
         segmenter.trainOnFixed(Xs,

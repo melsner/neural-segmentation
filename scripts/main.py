@@ -32,8 +32,6 @@ from ae_io import *
 from data_handling import *
 from sampling import *
 from scoring import *
-from network import *
-from unit_testing import *
 
 class SigHandler(object):
     def __init__(self):
@@ -103,6 +101,7 @@ if __name__ == "__main__":
     parser.add_argument("--nResample")
     parser.add_argument("--crossValDir")
     parser.add_argument("--evalFreq")
+    parser.add_argument("--saveFreq")
     parser.add_argument("--algorithm")
     parser.add_argument("--optimizer")
     parser.add_argument("--wordHidden")
@@ -157,6 +156,9 @@ if __name__ == "__main__":
     usingGPU = is_gpu_available()
     print('Using GPU: %s' %usingGPU)
     K.set_session(sess)
+    # K.manual_variable_initialization(True)
+    from network import *
+    from unit_testing import *
 
 
 
@@ -175,7 +177,6 @@ if __name__ == "__main__":
     print('Loading data...')
     print()
 
-    loadModels = False
     if args.logfile == None:
         logdir = "logs/" + str(os.getpid()) + '/'
     else:
@@ -183,11 +184,8 @@ if __name__ == "__main__":
 
     if not os.path.exists(logdir):
         os.makedirs(logdir)
-    else:
-        if not (args.supervisedAE or args.supervisedAEPhon or args.supervisedSegmenter):
-            loadModels = True
 
-    if loadModels and os.path.exists(logdir + '/checkpoint.obj'):
+    if os.path.exists(logdir + '/checkpoint.obj'):
         print('Training checkpoint data found. Loading...')
         with open(logdir + '/checkpoint.obj', 'rb') as f:
             checkpoint = pickle.load(f)
@@ -220,13 +218,14 @@ if __name__ == "__main__":
     AE_TYPE = checkpoint.get('aeType', args.aeType if args.aeType else 'rnn' if ACOUSTIC else 'rnn')
     assert AE_TYPE in ['rnn', 'cnn'], 'The AE type requested (%s) is not supported (choose from "rnn", "cnn")' %AE_TYPE
     FIT_TYPE = args.fitType if args.fitType else checkpoint.get('fitType', 'parts' if ACOUSTIC else 'parts')
-    assert FIT_TYPE in ['parts', 'whole', 'both'], 'If --fitType is specified, must be one of "parts", "whole", or "both" (defaults to "both")'
-    FIT_FULL = FIT_TYPE in ['whole', 'both']
+    assert FIT_TYPE in ['parts', 'full', 'both'], 'If --fitType is specified, must be one of "parts", "full", or "both" (defaults to "parts")'
+    FIT_FULL = FIT_TYPE in ['full', 'both']
     FIT_PARTS = FIT_TYPE in ['parts', 'both']
     N_RESAMPLE = checkpoint.get('nResample', int(args.nResample) if args.nResample else None if ACOUSTIC else None)
     assert ACOUSTIC or not N_RESAMPLE, 'Resampling disallowed in character mode since it does not make any sense'
     crossValDir = args.crossValDir if args.crossValDir else checkpoint.get('crossValDir', None)
     EVAL_FREQ = int(args.evalFreq) if args.evalFreq else checkpoint.get('evalFreq', 10 if ACOUSTIC else 50)
+    SAVE_FREQ = int(args.saveFreq) if args.saveFreq else checkpoint.get('saveFreq', 10 if ACOUSTIC else 50)
     wordHidden = checkpoint.get('wordHidden', int(args.wordHidden) if args.wordHidden else 100 if ACOUSTIC else 80)
     uttHidden = checkpoint.get('uttHidden', int(args.uttHidden) if args.uttHidden else 500 if ACOUSTIC else 400)
     segHidden = checkpoint.get('segHidden', int(args.segHidden) if args.segHidden else 500 if ACOUSTIC else 100)
@@ -258,7 +257,7 @@ if __name__ == "__main__":
     pretrain = checkpoint.get('pretrain', True)
     DEBUG = args.debug
     N_VIZ = checkpoint.get('nViz', int(args.nViz) if args.nViz != None else 10)
-    VAE = bool(args.vae) if args.vae is not None else checkpoint.get('vae', 0 if ACOUSTIC else 0)
+    VAE = bool(int(args.vae)) if args.vae is not None else checkpoint.get('vae', 0 if ACOUSTIC else 0)
     LATENT_DIM = checkpoint.get('latentDim', int(args.latentDim) if args.latentDim else 5 if ACOUSTIC else 2)
     if SEG_NET and not AE_NET:
         METRIC = 'logprobbinary'
@@ -287,6 +286,7 @@ if __name__ == "__main__":
     checkpoint['nResample'] = N_RESAMPLE
     checkpoint['crossValDir'] = crossValDir
     checkpoint['evalFreq'] = EVAL_FREQ
+    checkpoint['saveFreq'] = SAVE_FREQ
     checkpoint['wordHidden'] = wordHidden
     checkpoint['uttHidden'] = uttHidden
     checkpoint['segHidden'] = segHidden
@@ -314,7 +314,6 @@ if __name__ == "__main__":
     checkpoint['interpolationRate'] = INTERPOLATION_RATE
     checkpoint['iteration'] = iteration
     checkpoint['pretrain'] = pretrain
-    checkpoint['evalFreq'] = EVAL_FREQ
     checkpoint['nViz'] = N_VIZ
     checkpoint['vae'] = VAE
     checkpoint['latentDim'] = LATENT_DIM
@@ -333,7 +332,7 @@ if __name__ == "__main__":
 
     print()
     print('Pre-processing training data')
-    doc_indices, doc_list, charDim, raw_total, Xs, Xs_mask, gold, other = processInputDir(dataDir, checkpoint, maxChar, ACOUSTIC)
+    doc_indices, doc_list, charDim, raw_total, Xs, Xs_mask, gold, other = processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=ACOUSTIC)
     if ACOUSTIC:
         intervals, vad, vadBreaks, SEGFILE, GOLDWRD, GOLDPHN = other
     else:
@@ -416,7 +415,7 @@ if __name__ == "__main__":
         print('  Unit testing phonological auto-encoder network: %s' % args.supervisedAEPhon, file=f)
         print('  Reversing word order in reconstruction targets: %s' % REVERSE_UTT, file=f)
         print('  AE network type ("cnn", "rnn"): %s' % AE_TYPE, file=f)
-        print('  Fitting type ("parts", "whole", or "both"): %s' % FIT_TYPE, file=f)
+        print('  Fitting type ("parts", "full", or "both"): %s' % FIT_TYPE, file=f)
         if N_RESAMPLE:
             print('  Resampling discovered words to maximum word length: %s' % N_RESAMPLE, file=f)
         print('  Search algorithm: %s' % ALGORITHM, file=f)
@@ -468,6 +467,7 @@ if __name__ == "__main__":
               ('--crossValDir %s' % crossValDir) if crossValDir else '',
               '--aeType %s' % AE_TYPE,
               '--evalFreq %s' % EVAL_FREQ,
+              '--saveFreq %s' % SAVE_FREQ,
               '--algorithm %s' % ALGORITHM,
               '--optimizer %s' % OPTIM,
               '--wordHidden %s' % wordHidden,
@@ -515,7 +515,7 @@ if __name__ == "__main__":
     ##################################################################################
 
 
-    # ## Doesn't work, model won't save for some reason -- would be nice to not hvae this in the main script
+    # ## Doesn't work, model won't save for some reason -- would be nice to not have this in the main script
     # ae, segmenter = constructNetworks(wordHidden,
     #                                   uttHidden,
     #                                   charDropout,
@@ -542,10 +542,12 @@ if __name__ == "__main__":
 
     RNN = recurrent.LSTM
 
-    adam = optimizers.adam(clipnorm=1.)
-    nadam = optimizers.Nadam(clipnorm=1.)
-    rmsprop = optimizers.RMSprop(clipnorm=1.)
-    optim_map = {'adam': adam, 'nadam': nadam, 'rmsprop': rmsprop}
+    optim_map = {
+        'adam': lambda: optimizers.adam(clipnorm=1.),
+        'nadam': lambda: optimizers.Nadam(clipnorm=1.),
+        'rmsprop': lambda: optimizers.RMSprop(clipnorm=1.),
+        'sgd': lambda: optimizers.SGD(clipnorm=1.)
+    }
 
     if AE_NET:
         ## AUTO-ENCODER NETWORK
@@ -624,7 +626,8 @@ if __name__ == "__main__":
 
         ## WORDS ENCODER
         wordsEncoder = TimeDistributed(wordEncoder, name='WordEncoderDistributer')(fullInput)
-        wordsEncoder = Lambda(m_full2utt, name='WordsEncoderPremask')(wordsEncoder)
+        if MASKING:
+            wordsEncoder = Lambda(m_full2utt, name='WordsEncoderPremask')(wordsEncoder)
         wordsEncoder = Model(inputs=fullInput, outputs=wordsEncoder, name='WordsEncoder')
 
         ## UTTERANCE ENCODER
@@ -726,27 +729,24 @@ if __name__ == "__main__":
         if MASKING:
             ae_phon = Masking(mask_value=0, name='PhonMask')(ae_phon)
         ae_phon = Model(inputs=phonInput, outputs=ae_phon, name='AEPhon')
-        print('ae_phon')
         ae_phon.compile(
             loss=vae_loss if VAE else "mean_squared_error" if ACOUSTIC else sparse_xent,
             metrics=None if ACOUSTIC else [sparse_acc],
-            optimizer=optim_map[OPTIM])
+            optimizer=optim_map[OPTIM]())
 
         ae_utt = uttEncoderDecoder(uttInput)
         if MASKING:
             ae_utt = Masking(mask_value=0, name='UttMask')(Lambda(m_utt2utt, name='UttPremask')(ae_utt))
         ae_utt = Model(inputs=uttInput, outputs=ae_utt, name='AEUtt')
-        print('ae_utt')
-        ae_utt.compile(loss="mean_squared_error", optimizer=optim_map[OPTIM])
+        ae_utt.compile(loss="mean_squared_error", optimizer=optim_map[OPTIM]())
 
         ae_full = fullEncoderDecoder
         if MASKING:
             ae_full = Masking(mask_value=0, name='AEFullMask')(ae_full)
         ae_full = Model(inputs=fullInput, outputs=ae_full, name='AEFull')
-        print('ae_full')
         ae_full.compile(loss="mean_squared_error" if ACOUSTIC else sparse_xent,
                         metrics=None if ACOUSTIC else [sparse_acc],
-                        optimizer=optim_map[OPTIM])
+                        optimizer=optim_map[OPTIM]())
 
         ## EMBEDDING/DECODING FEEDFORWARD SUB-NETWORKS
         ## Embeddings must be custom Keras functions instead of models to allow predict with and without dropout
@@ -760,16 +760,18 @@ if __name__ == "__main__":
         embed_words_reconst = makeFunction(embed_words_reconst)
 
         word_decoder = Model(inputs=[wordDecInput,phonInput], outputs=wordDecoderTensor, name='WordDecoder')
-        print('word_decoder')
         word_decoder.compile(loss="mean_squared_error" if ACOUSTIC else sparse_xent,
                              metrics=None if ACOUSTIC else [sparse_acc],
-                             optimizer=optim_map[OPTIM])
+                             optimizer=optim_map[OPTIM]())
 
-        print('words_decoder')
         words_decoder = Model(inputs=[uttInput,fullInput], outputs=wordsDecoderTensor, name='WordsDecoder')
         words_decoder.compile(loss="mean_squared_error" if ACOUSTIC else sparse_xent,
                               metrics=None if ACOUSTIC else [sparse_acc],
-                              optimizer=optim_map[OPTIM])
+                              optimizer=optim_map[OPTIM]())
+
+        targets = K.placeholder(shape=ae_full.input_shape)
+        loss_tensor = K.function(inputs=[fullInput, targets, K.learning_phase()], outputs=[Lambda(lambda x: loss_array(*(x+[ae_full.loss_functions[0]])))([targets, fullEncoderDecoder])])
+        loss_tensor = makeFunction(loss_tensor)
 
         ## (SUB-)NETWORK SUMMARIES
         print('\n')
@@ -779,6 +781,12 @@ if __name__ == "__main__":
         print('\n')
         print('Word encoder model:')
         wordEncoder.summary()
+        print('\n')
+        print('Word sequence encoder model:')
+        wordsEncoder.summary()
+        print('\n')
+        print('Word sequence decoder model:')
+        wordsDecoder.summary()
         print('\n')
         print('Word decoder model:')
         wordDecoder.summary()
@@ -800,49 +808,64 @@ if __name__ == "__main__":
         print('\n')
 
         ## Initialize AE wrapper object containing all sub nets for convenience
-        ae = AE(ae_full, ae_utt, ae_phon, embed_word, embed_words, embed_words_reconst, word_decoder, words_decoder, LATENT_DIM if VAE else None)
+        ae = AE(ae_full,
+                ae_utt=ae_utt,
+                ae_phon=ae_phon,
+                embed_word=embed_word,
+                embed_words=embed_words,
+                embed_words_reconst=embed_words_reconst,
+                word_decoder=word_decoder,
+                words_decoder=words_decoder,
+                loss_tensor=loss_tensor,
+                latentDim=LATENT_DIM if VAE else None,
+                charDropout=charDropout,
+                wordDropout=wordDropout,
+                fitType=FIT_TYPE)
 
     if SEG_NET:
         ## SEGMENTER NETWORK
-        segInput = Input(shape=(maxChar+SEG_SHIFT, charDim), name='SegmenterInput')
+        segInput = Input(shape=(maxChar+SEG_SHIFT, charDim if ACOUSTIC else 1), name='SegmenterInput')
         segMaskInput = Input(shape=(maxChar+SEG_SHIFT,1), name='SegmenterMaskInput')
 
         segmenter = Sequential(name="Segmenter")
-        segmenter.add(RNN(segHidden, return_sequences=True, input_shape=(maxChar+SEG_SHIFT, charDim)))
+        if ACOUSTIC:
+            segmenter.add(RNN(segHidden, return_sequences=True, input_shape=(maxChar+SEG_SHIFT, charDim)))
+        else:
+            segmenter.add(Lambda(lambda x: K.squeeze(x, -1), input_shape=(maxChar+SEG_SHIFT, 1)))
+            if cEmbDim:
+                segmenter.add(Embedding(charDim, yDim))
+            else:
+                segmenter.add(Lambda(lambda x: to_categorical(x, num_classes=ctable.dim()), name='ToCategorical'))
+            segmenter.add(RNN(segHidden, return_sequences=True))
         segmenter.add(TimeDistributed(Dense(1)))
         segmenter.add(Activation("sigmoid"))
         segmenterPremask = Lambda(lambda x: x[0] * (1- K.cast(x[1], 'float32')), name='Seg-output-premask')([segmenter(segInput), segMaskInput])
         segmenter = Masking(mask_value=0.0, name='Seg-mask')(segmenterPremask)
         segmenter = Model(inputs=[segInput, segMaskInput], outputs= segmenter)
         segmenter.compile(loss="binary_crossentropy",
-                          optimizer=optim_map[OPTIM])
-        print('Segmenter network summary')
+                          optimizer=optim_map[OPTIM]())
+        print('Segmenter model:')
         segmenter.summary()
         print('')
 
         ## Initialize Segmenter wrapper object for convenience
-        segmenter = Segmenter(segmenter, SEG_SHIFT)
+        segmenter = Segmenter(segmenter, seg_shift=SEG_SHIFT, charDim=charDim)
 
     ## SAVE/LOAD WEIGHTS
     if AE_NET:
         ## Save current model weights for reinitalization if needed
-        ae.save(logdir + '/ae_init.h5')
-        if loadModels and os.path.exists(logdir + '/ae.h5'):
-            print('Autoencoder checkpoint found. Loading weights...')
-            ae.load(logdir + '/ae.h5')
-        else:
-            print('No autoencoder checkpoint found. Keeping default initialization.')
-            ae.save(logdir + '/ae.h5')
+        RESUME_AE = ae.load(logdir)
+        if not RESUME_AE:
+            # sess.run(tf.global_variables_initializer())
+            ae.save(logdir, suffix='_init')
+            ae.save(logdir)
     if SEG_NET:
         ## Save current model weights for reinitalization if needed
-        segmenter.save(logdir + '/segmenter_init.h5')
-
-        if loadModels and os.path.exists(logdir + '/segmenter.h5'):
-            print('Segmenter checkpoint found. Loading weights...')
-            segmenter.load(logdir + '/segmenter.h5')
-        else:
-            print('No segmenter checkpoint found. Keeping default initialization.')
-            segmenter.save(logdir + '/segmenter.h5')
+        RESUME_SEG = segmenter.load(logdir)
+        if not RESUME_SEG:
+            # sess.run(tf.global_variables_initializer())
+            segmenter.save(logdir, suffix='_init')
+            segmenter.save(logdir)
 
 
 
@@ -862,36 +885,38 @@ if __name__ == "__main__":
         print('')
         print('Network unit testing')
         segsProposalXDoc = dict.fromkeys(doc_list)
+        trainOnRandom = True
 
-        # Random segmentations
-        testUnits(Xs,
-                  Xs_mask,
-                  pSegs,
-                  maxChar,
-                  maxUtt,
-                  maxLen,
-                  doc_indices,
-                  utt_ids,
-                  logdir,
-                  reverseUtt=REVERSE_UTT,
-                  batch_size=BATCH_SIZE,
-                  nResample=N_RESAMPLE,
-                  trainIters=trainIters,
-                  supervisedAE=args.supervisedAE,
-                  supervisedAEPhon=args.supervisedAEPhon,
-                  supervisedSegmenter=args.supervisedSegmenter,
-                  ae=ae if AE_NET else None,
-                  segmenter=segmenter if SEG_NET else None,
-                  vadBreaks=vadBreaks if ACOUSTIC else None,
-                  vad=vad if ACOUSTIC else None,
-                  intervals=intervals if ACOUSTIC else None,
-                  ctable=None if ACOUSTIC else ctable,
-                  goldEval=None if ACOUSTIC else gold,
-                  segLevel='rand',
-                  acoustic=ACOUSTIC,
-                  fitFull=FIT_FULL,
-                  fitParts=FIT_PARTS,
-                  debug=DEBUG)
+        if trainOnRandom:
+            # Random segmentations
+            testUnits(Xs,
+                      Xs_mask,
+                      pSegs,
+                      maxChar,
+                      maxUtt,
+                      maxLen,
+                      doc_indices,
+                      utt_ids,
+                      logdir,
+                      reverseUtt=REVERSE_UTT,
+                      batch_size=BATCH_SIZE,
+                      nResample=N_RESAMPLE,
+                      trainIters=trainIters,
+                      supervisedAE=args.supervisedAE,
+                      supervisedAEPhon=args.supervisedAEPhon,
+                      supervisedSegmenter=args.supervisedSegmenter,
+                      ae=ae if AE_NET else None,
+                      segmenter=segmenter if SEG_NET else None,
+                      vadBreaks=vadBreaks if ACOUSTIC else None,
+                      vad=vad if ACOUSTIC else None,
+                      intervals=intervals if ACOUSTIC else None,
+                      ctable=None if ACOUSTIC else ctable,
+                      goldEval=None if ACOUSTIC else gold,
+                      segLevel='rand',
+                      acoustic=ACOUSTIC,
+                      fitFull=FIT_FULL,
+                      fitParts=FIT_PARTS,
+                      debug=DEBUG)
 
         ## Gold segmentations (phone if acoustic)
         if not ACOUSTIC or GOLDPHN:
@@ -1073,9 +1098,9 @@ if __name__ == "__main__":
             iteration = 0
 
         if AE_NET:
-            ae.save(logdir + '/ae.h5')
+            ae.save(logdir)
         if SEG_NET and not AE_NET:
-            segmenter.save(logdir + '/segmenter.h5')
+            segmenter.save(logdir)
         with open(logdir + '/checkpoint.obj', 'wb') as f:
             checkpoint['iteration'] = iteration
             checkpoint['pretrain'] = pretrain
@@ -1219,8 +1244,7 @@ if __name__ == "__main__":
                                                                                reverseUtt=REVERSE_UTT,
                                                                                batch_size=BATCH_SIZE,
                                                                                nResample=N_RESAMPLE,
-                                                                               agg='sum' if ALGORITHM=='viterbi' else 'mean',
-                                                                               metric=METRIC)
+                                                                               agg='sum' if ALGORITHM=='viterbi' else 'mean')
 
                     Yae_batch = getYae(Xae_batch, REVERSE_UTT)
 
@@ -1263,11 +1287,11 @@ if __name__ == "__main__":
                                            Xs_mask_batch,
                                            segProbs_batch,
                                            batch_size=BATCH_SIZE)
-                # print('Getting segmentation proposal from network')
-                # preds = segmenter.predict(Xs_batch,
-                #                           Xs_mask_batch,
-                #                           batch_size=BATCH_SIZE)
-                # segsProposal_batch = pSegs2Segs(preds, ACOUSTIC)
+                print('Getting segmentation proposal from network')
+                preds = segmenter.predict(Xs_batch,
+                                          Xs_mask_batch,
+                                          batch_size=BATCH_SIZE)
+                segsProposal_batch = pSegs2Segs(preds, ACOUSTIC)
                 if ACOUSTIC:
                     segsProposal_batch[np.where(vad_batch)] = 1.
                 else:
@@ -1331,28 +1355,29 @@ if __name__ == "__main__":
             b += SAMPLING_BATCH_SIZE
             batch_num_global += 1
 
-            print('Saving restore point')
-            if AE_NET:
-                ae.save(logdir + '/ae.h5')
-            if SEG_NET:
-                segmenter.save(logdir + '/segmenter.h5')
-            with open(logdir + '/checkpoint.obj', 'wb') as f:
-                checkpoint['permute'] = (p, p_inv)
-                checkpoint['b'] = b
-                checkpoint['batch_num_global'] = batch_num_global
+            if batch_num_global % SAVE_FREQ == 0:
+                print('Saving restore point')
                 if AE_NET:
-                    checkpoint['epochAELoss'] = epochAELoss
-                    if not ACOUSTIC:
-                        checkpoint['epochAEAcc'] = epochAEAcc
-                    checkpoint['epochDel'] = epochDel
-                    checkpoint['epochOneL'] = epochOneL
+                    ae.save(logdir)
                 if SEG_NET:
-                    checkpoint['epochSegLoss'] = epochSegLoss
-                checkpoint['iteration'] = iteration
-                checkpoint['segsProposal'] = segsProposal
-                checkpoint['segProbs'] = segProbs
-                checkpoint['epochSeg'] = epochSeg
-                pickle.dump(checkpoint, f)
+                    segmenter.save(logdir)
+                with open(logdir + '/checkpoint.obj', 'wb') as f:
+                    checkpoint['permute'] = (p, p_inv)
+                    checkpoint['b'] = b
+                    checkpoint['batch_num_global'] = batch_num_global
+                    if AE_NET:
+                        checkpoint['epochAELoss'] = epochAELoss
+                        if not ACOUSTIC:
+                            checkpoint['epochAEAcc'] = epochAEAcc
+                        checkpoint['epochDel'] = epochDel
+                        checkpoint['epochOneL'] = epochOneL
+                    if SEG_NET:
+                        checkpoint['epochSegLoss'] = epochSegLoss
+                    checkpoint['iteration'] = iteration
+                    checkpoint['segsProposal'] = segsProposal
+                    checkpoint['segProbs'] = segProbs
+                    checkpoint['epochSeg'] = epochSeg
+                    pickle.dump(checkpoint, f)
 
             ## Evaluate on cross-validation set
             sig.disallow_interrupt()
@@ -1468,7 +1493,7 @@ if __name__ == "__main__":
             writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_dir=logdir, TextGrid=True, dataset='train')
         else:
             printSegScores(getSegScores(gold, segsProposalXDoc, ACOUSTIC), ACOUSTIC)
-            writeSolutions(logdir, segsProposalXDoc[doc_list[0]], gold[doc_list[0]], filename='seg_train.txt')
+            writeCharSegs(logdir, segsProposalXDoc[doc_list[0]], gold[doc_list[0]], filename='seg_train.txt')
 
         print('Plotting visualizations on training set')
         if AE_NET:
@@ -1515,9 +1540,9 @@ if __name__ == "__main__":
 
         print('Saving restore point')
         if AE_NET:
-            ae.save(logdir + '/ae.h5')
+            ae.save(logdir)
         if SEG_NET:
-            segmenter.save(logdir + '/segmenter.h5')
+            segmenter.save(logdir)
         with open(logdir + '/checkpoint.obj', 'wb') as f:
             checkpoint['iteration'] = iteration
             checkpoint['batch_num_global'] = batch_num_global

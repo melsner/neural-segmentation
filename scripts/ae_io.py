@@ -2,10 +2,8 @@ from __future__ import print_function, division
 import sys, re, os, math, numpy as np
 from numpy import inf
 from scoring import *
-from data_handling import charSeq2WrdSeq, frameSegs2timeSegs, timeSegs2frameSegs, intervals2ForcedSeg, filterMFCCs, \
-frameInputs2Utts, frameSegs2FrameSegsXUtt, texts2Xs, getMask, reconstructXs
+from data_handling import *
 from echo_words import CharacterTable
-from sampling import sampleSeg, sampleSegs
 
 
 
@@ -413,7 +411,7 @@ def writeLog(batch_num_global, iteration, epochAELoss, epochAcc, epochSegLoss, e
                 print("\t".join(["%g" % xx for xx in score_row]), file=f)
 
 ## Used only in text mode
-def writeSolutions(logdir, allBestSeg, text, iteration=None, filename='seg.txt'):
+def writeCharSegs(logdir, allBestSeg, text, iteration=None, filename='seg.txt'):
     segmented = charSeq2WrdSeq(allBestSeg, text)
 
     if iteration:
