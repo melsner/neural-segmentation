@@ -24,8 +24,8 @@ def testFullAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_in
 
     if gold is not None:
         if acoustic:
-            _, goldseg = timeSegs2frameSegs(gold)
-            Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+            _, goldseg = readSegFile(gold)
+            Y = frameSeqs2FrameSeqsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
         else:
             Y = texts2Segs(gold, maxChar)
     else:
@@ -117,8 +117,8 @@ def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, u
                          segLevel=None, acoustic=False, debug=False):
     if gold is not None:
         if acoustic:
-            _, goldseg = timeSegs2frameSegs(gold)
-            Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+            _, goldseg = readSegFile(gold)
+            Y = frameSeqs2FrameSeqsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
         else:
             Y = texts2Segs(gold, maxChar)
     else:
@@ -211,8 +211,8 @@ def testSegmenterOnFixedSeg(segmenter, Xs, Xs_mask, pSegs, maxChar, doc_indices,
                             segLevel=None, acoustic=False, debug=False):
     if gold:
         if acoustic:
-            _, goldseg = timeSegs2frameSegs(gold)
-            Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+            _, goldseg = readSegFile(gold)
+            Y = frameSeqs2FrameSeqsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
         else:
             Y = texts2Segs(gold, maxChar)
     else:
@@ -260,8 +260,8 @@ def testSegmenterOnFixedSeg(segmenter, Xs, Xs_mask, pSegs, maxChar, doc_indices,
                     s, e = doc_indices[doc]
                     masked_target = np.ma.array(Y[s:e], mask=Xs_mask[s:e])
                     targetsXDoc[doc] = masked_target.compressed()
-                targetsXDoc = frameSegs2timeSegs(intervals, targetsXDoc)
-                proposalsXDoc = frameSegs2timeSegs(intervals, proposalsXDoc)
+                targetsXDoc = segs2Intervals(targetsXDoc, intervals)
+                proposalsXDoc = segs2Intervals(proposalsXDoc, intervals)
             else:
                 for doc in targetsXDoc:
                     s, e = doc_indices[doc]
@@ -298,7 +298,7 @@ def testSegmenterOnFixedSeg(segmenter, Xs, Xs_mask, pSegs, maxChar, doc_indices,
 
 def testUnits(Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_indices, utt_ids, logdir, reverseUtt = False,
               batch_size=128, nResample=None, trainIters=100, supervisedAE=False, supervisedAEPhon=False,
-              supervisedSegmenter=False, ae=None, segmenter=None, vadBreaks=None, vad=None, intervals=None,
+              supervisedSegmenter=False, ae=None, segmenter=None, vadSegs=None, vadSegsXUtt=None, vadIntervals=None,
               ctable=None, gold=None, goldEval=None, segLevel=None, acoustic=False, fitParts=True, fitFull=False,
               debug=False):
     if supervisedAE:
@@ -316,7 +316,7 @@ def testUnits(Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_indices, utt_ids,
                              batch_size=batch_size,
                              nResample=nResample,
                              trainIters=trainIters,
-                             vadBreaks=vadBreaks,
+                             vadBreaks=vadSegs,
                              ctable=ctable,
                              gold=gold,
                              segLevel=segLevel,
@@ -339,7 +339,7 @@ def testUnits(Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_indices, utt_ids,
                              batch_size=batch_size,
                              nResample=nResample,
                              trainIters=trainIters,
-                             vadBreaks=vadBreaks,
+                             vadBreaks=vadSegs,
                              ctable=ctable,
                              gold=gold,
                              segLevel=segLevel,
@@ -357,9 +357,9 @@ def testUnits(Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_indices, utt_ids,
                                 logdir,
                                 trainIters=trainIters,
                                 batch_size=batch_size,
-                                vadBreaks=vadBreaks,
-                                vad=vad,
-                                intervals=intervals,
+                                vadBreaks=vadSegs,
+                                vad=vadSegsXUtt,
+                                intervals=vadIntervals,
                                 gold=gold,
                                 goldEval=goldEval,
                                 segLevel=segLevel,

@@ -415,67 +415,12 @@ def printReconstruction(utt_ids, ae, Xae, ctable, batch_size=128, reverseUtt=Fal
 ##################################################################################
 ##################################################################################
 
-def timeSegs2frameSegs(timeseg_file):
-    intervals = {}
-    speech = {}
-    offsets = {}
-    seg = 0
-    with open(timeseg_file, 'rb') as f:
-        lines = f.readlines()
-        lines.sort(key = lambda x: float(x.strip().split()[1]))
-    for line in lines:
-        if line.strip() != '':
-            doc, start, end = line.strip().split()[:3]
-            if doc in intervals:
-                if float(start) <= intervals[doc][-1][1]:
-                    intervals[doc][-1] = (intervals[doc][-1][0],float(end))
-                else:
-                    intervals[doc].append((float(start),float(end)))
-            else:
-                intervals[doc] = [(float(start),float(end))]
-            s, e = int(np.rint(float(start)*100)), int(np.rint(float(end)*100))
-            if doc in speech:
-                last = speech[doc][-1][1] + offsets.get(doc, 0)
-            else:
-                last = 0
-            if last < s:
-                seg = 1
-                if doc in offsets:
-                    offsets[doc] += s - last
-                else:
-                    offsets[doc] = s - last
-            else:
-                seg = 0
-            offset = offsets.get(doc, 0)
-            if doc in speech:
-                # In rare cases, the segmentation file
-                # contains a start time earlier than previous
-                # interval's end time, requiring us to check this.
-                s = max(s,speech[doc][-1][1])
-                speech[doc].append((s-offset,e-offset,seg))
-            else:
-                speech[doc] = [(s-offset,e-offset,seg)]
-
-    segs = {}
-    for doc in speech:
-        segs[doc] = np.zeros((speech[doc][-1][1]))
-        for seg in speech[doc]:
-            segs[doc][seg[0]] = 1.0
-
-    return intervals, segs
-
-def frameSegs2timeSegs(intervals, seg_f):
-    out = dict.fromkeys(intervals)
-    for doc in intervals:
-        out[doc] = frameSeg2timeSeg(intervals[doc],seg_f[doc])
-    return out
-
-def frameSeg2timeSeg(intervals, seg_f):
+def seg2Intervals(seg, vadIntervals):
     offset = last_interval = last_seg = 0
     this_frame = 0
     next_frame = 1
     seg_t = []
-    for i in intervals:
+    for i in vadIntervals:
         # Interval boundaries in seconds (time)
         st, et = i
         # Interval boundaries in frames
@@ -484,7 +429,7 @@ def frameSeg2timeSeg(intervals, seg_f):
         offset += sf - last_interval
         last_interval = ef
         while this_frame + offset < ef:
-            if next_frame >= seg_f.shape[0] or np.allclose(seg_f[next_frame], 1):
+            if next_frame >= seg.shape[0] or np.allclose(seg[next_frame], 1):
                 if last_seg+offset == sf:
                     start = st
                 else:
@@ -500,60 +445,13 @@ def frameSeg2timeSeg(intervals, seg_f):
 
     return seg_t
 
-def frameInput2Utts(raw, vadBreaks, maxChar):
-    maxLen = min(len(raw), len(vadBreaks))
-    if len(raw) != len(vadBreaks):
-        maxLen = min(len(raw), len(vadBreaks))
-        print('Warning: Different number of timesteps in raw (%d) and vadBreaks (%d). Using %d.' %(len(raw), len(vadBreaks), maxLen))
-    s = 0
-    frame_len = raw.shape[-1]
-    s = 0
-    Xs = []
-    while s < maxLen:
-        e = getNextFrameUtt(vadBreaks[:maxLen], maxChar, start_ix=s)
-        Xseg_batch = np.zeros((maxChar, frame_len))
-        Xseg_batch[:e - s, :] = raw[s:e, :]
-        Xs.append(Xseg_batch)
-        s = e
-    return np.stack(Xs)
+def segs2Intervals(seg, intervals):
+    out = dict.fromkeys(intervals)
+    for doc in intervals:
+        out[doc] = seg2Intervals(seg[doc], intervals[doc])
+    return out
 
-def frameInputs2Utts(raw, vadBreaks, maxChar):
-    utts = []
-    doc_indices = dict.fromkeys(raw.keys())
-    ix = 0
-    for doc in doc_indices:
-        utts_doc = frameInput2Utts(raw[doc], vadBreaks[doc], maxChar)
-        utts.append(utts_doc)
-        doc_indices[doc] = (ix, ix+len(utts_doc))
-        ix += len(utts_doc)
-    return np.concatenate(utts), doc_indices
-
-def frameSeg2FrameSegXUtt(framesegs, vadBreaks, maxChar):
-    maxLen = min(len(framesegs), len(vadBreaks))
-    if len(framesegs) != len(vadBreaks):
-        maxLen = min(len(framesegs), len(vadBreaks))
-        print('Warning: Different number of timesteps in framesegs (%d) and vadBreaks (%d). Using %d.' %(len(framesegs), len(vadBreaks), maxLen))
-    s = 0
-    Yseg = []
-    while s < maxLen:
-        e = getNextFrameUtt(vadBreaks[:maxLen], maxChar, start_ix=s)
-        Yseg_batch = np.zeros(maxChar)
-        Yseg_batch[:e - s] = framesegs[s:e]
-        Yseg.append(Yseg_batch[:,None])
-        s = e
-    return np.stack(Yseg)
-
-def frameSegs2FrameSegsXUtt(framesegs, vadBreaks, maxChar, doc_indices):
-    Ysegs = dict.fromkeys(framesegs.keys())
-    for doc in Ysegs:
-        Ysegs[doc] = frameInput2Utts(np.expand_dims(framesegs[doc], -1), vadBreaks[doc], maxChar)
-    Xs = np.zeros((sum([len(Ysegs[d]) for d in Ysegs]), maxChar, 1))
-    for doc in doc_indices:
-        s, e = doc_indices[doc]
-        Xs[s:e] = Ysegs[doc]
-    return Xs
-
-def intervals2ForcedSeg(intervals):
+def intervalsXDoc2SegsXDoc(intervals):
     out = dict.fromkeys(intervals)
     for doc in intervals:
         out[doc] = []
@@ -565,35 +463,65 @@ def intervals2ForcedSeg(intervals):
         out[doc] = np.array(out[doc])
     return out
 
-def getNextFrameUtt(vad_breaks, maxChar, start_ix=0):
-    # end_ix = start_ix + 1
-    # while end_ix < min(len(vad_breaks), start_ix+BATCH_SIZE):
-    #     if vad_breaks[end_ix] > 0:
-    #         break
-    #     end_ix += 1
-    # return end_ix
-    end_ix = 1 + start_ix \
-             + np.argmax(vad_breaks[start_ix+1:maxChar]) if vad_breaks[start_ix + 1:maxChar].sum() > 0 else min(len(vad_breaks), start_ix + maxChar)
+def getNextFrameUtt(vadSegs, maxChar, start_ix=0):
+    end_ix = start_ix + 1 \
+             + np.argmax(vadSegs[start_ix+1:start_ix+maxChar]) if (vadSegs[start_ix+1:start_ix+maxChar].sum() > 0) else min(len(vadSegs), start_ix+maxChar)
     return end_ix
 
-def seg2pSegWithForced(segs, vad_breaks, interpolationRate=0.1):
-    out = segs2pSegs(segs, interpolationRate)
-    out[np.where(vad_breaks)] = 1.
+def frameSeq2FrameSeqXUtt(raw, vadSegs, maxChar, useVad=False):
+    maxLen = min(len(raw), len(vadSegs))
+    if len(raw) != len(vadSegs):
+        print('Warning: Different number of timesteps in raw (%d) and vadBreaks (%d). Using %d.' % (len(raw), len(vadSegs), maxLen))
+
+    oneDimInput = False
+    if len(raw.shape) == 1:
+        oneDimInput = True
+        raw = np.expand_dims(raw, -1)
+    charDim = raw.shape[-1]
+    s = 0
+    Xs = []
+    while s < maxLen:
+        if useVad:
+            e = getNextFrameUtt(vadSegs[:maxLen], maxChar, start_ix=s)
+        else:
+            e = min(s + maxChar, maxLen)
+        Xs_utt = np.zeros((maxChar, charDim))
+        Xs_utt[:e - s, :] = raw[s:e, :]
+        Xs.append(Xs_utt)
+        s = e
+    out = np.stack(Xs)
+    if oneDimInput:
+        out = np.squeeze(Xs, -1)
     return out
 
-def segs2pSegsWithForced(segs, vad_breaks, interpolationRate=0.1):
-    out = dict.fromkeys(segs.keys())
-    for doc in segs:
-        out[doc] = seg2pSegWithForced(segs[doc], vad_breaks[doc], interpolationRate)
-    return out
+def frameSeqs2FrameSeqsXUtt(raw, vadSegs, maxChar, doc_indices):
+    Ysegs = dict.fromkeys(raw.keys())
+    for doc in Ysegs:
+        Ysegs[doc] = frameSeq2FrameSeqXUtt(np.expand_dims(raw[doc], -1), vadSegs[doc], maxChar)
+    Xs = np.zeros((sum([len(Ysegs[d]) for d in Ysegs]), maxChar, 1))
+    for doc in doc_indices:
+        s, e = doc_indices[doc]
+        Xs[s:e] = Ysegs[doc]
+    return Xs
 
-def filterMFCCs(mfccs, intervals, segs, FRAME_SIZE=40):
+def processAcousticDocuments(raw, vadSegs, maxChar):
+    utts = []
+    doc_indices = dict.fromkeys(raw.keys())
+    ix = 0
+    for doc in doc_indices:
+        utts_doc = frameSeq2FrameSeqXUtt(raw[doc], vadSegs[doc], maxChar)
+        utts.append(utts_doc)
+        doc_indices[doc] = (ix, ix+len(utts_doc))
+        ix += len(utts_doc)
+    return np.concatenate(utts), doc_indices
+
+def filterMFCCs(mfccs, vadIntervals, charDim=40):
     # Filter out non-speech portions
     mfcc_intervals = {}
     total_frames = 0
-    for doc in segs:
-        mfcc_intervals[doc] = np.zeros((0,FRAME_SIZE))
-        for i in intervals[doc]:
+    for doc in vadIntervals:
+        mfcc_intervals[doc] = np.zeros((0, charDim))
+        for i in vadIntervals[doc]:
             s, e = int(np.rint(float(i[0]*100))), int(np.rint(float(i[1]*100)))
             mfcc_intervals[doc] = np.append(mfcc_intervals[doc], mfccs[doc][s:e,:], 0)
         print('Document "%s" has %d speech frames.' %(doc, len(mfcc_intervals[doc])))

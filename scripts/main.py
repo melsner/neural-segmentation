@@ -334,7 +334,7 @@ if __name__ == "__main__":
     print('Pre-processing training data')
     doc_indices, doc_list, charDim, raw_total, Xs, Xs_mask, gold, other = processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=ACOUSTIC)
     if ACOUSTIC:
-        intervals, vad, vadBreaks, SEGFILE, GOLDWRD, GOLDPHN = other
+        vadIntervals, vadSegs, vadSegsXUtt, vadFile, goldWrdFile, goldPhnFile = other
     else:
         ctable = other
 
@@ -344,7 +344,7 @@ if __name__ == "__main__":
         doc_indices_cv, doc_list_cv, charDim_cv, raw_total_cv, Xs_cv, Xs_mask_cv, gold_cv, other_cv = processInputDir(crossValDir, checkpoint, maxChar, ctable=ctable if not ACOUSTIC else None, acoustic=ACOUSTIC)
         assert charDim == charDim_cv, 'ERROR: Training and cross-validation data have different dimensionality (%i, %i)' %(charDim, charDim_cv)
         if ACOUSTIC:
-            intervals_cv, vad_cv, vadBreaks_cv, SEGFILE_CV, GOLDWRD_CV, GOLDPHN_CV = other_cv
+            vadIntervals_cv, vadSegs_cv, vadSegsXUtt_cv, vadFile_cv, goldWrdFile_cv, goldPhnFile_cv = other_cv
         else:
             ctable_cv = other
 
@@ -359,7 +359,7 @@ if __name__ == "__main__":
     ## pSegs: segmentation proposal distribution
     if ACOUSTIC:
         pSegs = INITIAL_SEG_PROB * np.ones((len(Xs), maxChar, 1))
-        pSegs[np.where(vad)] = 1.
+        pSegs[np.where(vadSegsXUtt)] = 1.
     else:
         pSegs = INITIAL_SEG_PROB * np.ones((len(Xs), maxChar, 1))
         pSegs[:, 0] = 1.
@@ -391,23 +391,23 @@ if __name__ == "__main__":
         if ACOUSTIC:
             print('  Input type: Acoustic', file=f)
             print('  Training data location: %s' % dataDir, file=f)
-            if SEGFILE:
-                print('  Training initial segmentation file: %s' % SEGFILE, file=f)
-            if GOLDWRD:
-                print('  Training gold word segmentation file: %s' % GOLDWRD, file=f)
-            if GOLDPHN:
-                print('  Training gold phoneme segmentation file: %s' % GOLDPHN, file=f)
+            if vadFile:
+                print('  Training initial segmentation file: %s' % vadFile, file=f)
+            if goldWrdFile:
+                print('  Training gold word segmentation file: %s' % goldWrdFile, file=f)
+            if goldPhnFile:
+                print('  Training gold phoneme segmentation file: %s' % goldPhnFile, file=f)
         else:
             print('  Input type: Text', file=f)
         if crossValDir:
             print('  Cross-validation data location: %s' % crossValDir, file=f)
             if ACOUSTIC:
-                if SEGFILE:
-                    print('  Cross-validation segmentation file: %s' % SEGFILE_CV, file=f)
-                if GOLDWRD:
-                    print('  Cross-validation gold word segmentation file: %s' % GOLDWRD_CV, file=f)
-                if GOLDPHN:
-                    print('  Cross-validation gold phone segmentation file: %s' % GOLDPHN_CV, file=f)
+                if vadFile:
+                    print('  Cross-validation segmentation file: %s' % vadFile_cv, file=f)
+                if goldWrdFile:
+                    print('  Cross-validation gold word segmentation file: %s' % goldWrdFile_cv, file=f)
+                if goldPhnFile:
+                    print('  Cross-validation gold phone segmentation file: %s' % goldPhnFile_cv, file=f)
         print('  Using segmenter network: %s' % SEG_NET, file=f)
         print('  Using auto-encoder network: %s' % AE_NET, file=f)
         print('  Unit testing segmenter network: %s' % args.supervisedSegmenter, file=f)
@@ -907,9 +907,9 @@ if __name__ == "__main__":
                       supervisedSegmenter=args.supervisedSegmenter,
                       ae=ae if AE_NET else None,
                       segmenter=segmenter if SEG_NET else None,
-                      vadBreaks=vadBreaks if ACOUSTIC else None,
-                      vad=vad if ACOUSTIC else None,
-                      intervals=intervals if ACOUSTIC else None,
+                      vadSegs=vadSegs if ACOUSTIC else None,
+                      vadSegsXUtt=vadSegsXUtt if ACOUSTIC else None,
+                      vadIntervals=vadIntervals if ACOUSTIC else None,
                       ctable=None if ACOUSTIC else ctable,
                       goldEval=None if ACOUSTIC else gold,
                       segLevel='rand',
@@ -919,7 +919,7 @@ if __name__ == "__main__":
                       debug=DEBUG)
 
         ## Gold segmentations (phone if acoustic)
-        if not ACOUSTIC or GOLDPHN:
+        if not ACOUSTIC or goldPhnFile:
             if ACOUSTIC:
                 print('Using phone-level segmentations')
             testUnits(Xs,
@@ -940,11 +940,11 @@ if __name__ == "__main__":
                       supervisedSegmenter=args.supervisedSegmenter,
                       ae=ae if AE_NET else None,
                       segmenter=segmenter if SEG_NET else None,
-                      vadBreaks=vadBreaks if ACOUSTIC else None,
-                      vad=vad if ACOUSTIC else None,
-                      intervals=intervals if ACOUSTIC else None,
+                      vadSegs=vadSegs if ACOUSTIC else None,
+                      vadSegsXUtt=vadSegsXUtt if ACOUSTIC else None,
+                      vadIntervals=vadIntervals if ACOUSTIC else None,
                       ctable=None if ACOUSTIC else ctable,
-                      gold=GOLDPHN if ACOUSTIC else gold,
+                      gold=goldPhnFile if ACOUSTIC else gold,
                       goldEval=gold['phn'] if ACOUSTIC else gold,
                       segLevel='phn' if ACOUSTIC else 'gold',
                       acoustic=ACOUSTIC,
@@ -953,7 +953,7 @@ if __name__ == "__main__":
                       debug=DEBUG)
 
         ## Gold word segmentations (if acoustic)
-        if ACOUSTIC and GOLDWRD:
+        if ACOUSTIC and goldWrdFile:
             if ACOUSTIC:
                 print('Using word-level segmentations')
             testUnits(Xs,
@@ -974,11 +974,11 @@ if __name__ == "__main__":
                       supervisedSegmenter=args.supervisedSegmenter,
                       ae=ae if AE_NET else None,
                       segmenter=segmenter if SEG_NET else None,
-                      vadBreaks=vadBreaks if ACOUSTIC else None,
-                      vad=vad if ACOUSTIC else None,
-                      intervals=intervals if ACOUSTIC else None,
+                      vadSegs=vadSegs if ACOUSTIC else None,
+                      vadSegsXUtt=vadSegsXUtt if ACOUSTIC else None,
+                      vadIntervals=vadIntervals if ACOUSTIC else None,
                       ctable=None if ACOUSTIC else ctable,
-                      gold=GOLDWRD if ACOUSTIC else gold,
+                      gold=goldWrdFile if ACOUSTIC else gold,
                       goldEval=gold['wrd'] if ACOUSTIC else gold,
                       segLevel='wrd',
                       acoustic=ACOUSTIC,
@@ -1011,7 +1011,7 @@ if __name__ == "__main__":
         # ## Use for testing with pre-training on gold segs
         # if ACOUSTIC:
         #     _, goldseg = timeSegs2frameSegs(GOLDPHN)
-        #     segs = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+        #     segs = frameSegs2FrameSegsXUtt(goldseg, vadSegs, maxChar, doc_indices)
         # else:
         #     segs = texts2Segs(gold, maxChar)
         segs = sampleSeg(pSegs)
@@ -1183,7 +1183,7 @@ if __name__ == "__main__":
         Xs_mask = Xs_mask[p]
         pSegs = pSegs[p]
         if ACOUSTIC:
-            vad = vad[p]
+            vadSegsXUtt = vadSegsXUtt[p]
 
         while b < len(Xs):
             bt0 = time.time()
@@ -1191,7 +1191,7 @@ if __name__ == "__main__":
             Xs_batch = Xs[b:b+SAMPLING_BATCH_SIZE]
             Xs_mask_batch = Xs_mask[b:b+SAMPLING_BATCH_SIZE]
             if ACOUSTIC:
-                vad_batch = vad[b:b+SAMPLING_BATCH_SIZE]
+                vadSegsXUtt_batch = vadSegsXUtt[b:b + SAMPLING_BATCH_SIZE]
 
             if iteration < trainNoSegIters:
                 pSegs_batch = pSegs[b:b+SAMPLING_BATCH_SIZE]
@@ -1208,7 +1208,7 @@ if __name__ == "__main__":
 
                 ## Force segmentations where needed
                 if ACOUSTIC:
-                    pSegs_batch[np.where(vad_batch)] = 1.
+                    pSegs_batch[np.where(vadSegsXUtt_batch)] = 1.
                 else:
                     pSegs_batch[:,0] = 1.
 
@@ -1293,7 +1293,7 @@ if __name__ == "__main__":
                                           batch_size=BATCH_SIZE)
                 segsProposal_batch = pSegs2Segs(preds, ACOUSTIC)
                 if ACOUSTIC:
-                    segsProposal_batch[np.where(vad_batch)] = 1.
+                    segsProposal_batch[np.where(vadSegsXUtt_batch)] = 1.
                 else:
                     segsProposal_batch[:, 0, ...] = 1.
                 segsProposal_batch[np.where(Xs_mask_batch)] = 0.
@@ -1383,7 +1383,7 @@ if __name__ == "__main__":
             sig.disallow_interrupt()
             if crossValDir and (batch_num_global % EVAL_FREQ == 0):
                 if ACOUSTIC:
-                    otherParams = intervals_cv, GOLDWRD_CV, GOLDPHN_CV, vad_cv
+                    otherParams = vadIntervals_cv, goldWrdFile_cv, goldPhnFile_cv, vadSegsXUtt_cv
                 else:
                     otherParams = ctable_cv
                 evalCrossVal(Xs_cv,
@@ -1426,7 +1426,7 @@ if __name__ == "__main__":
         Xs = Xs[p_inv]
         Xs_mask = Xs_mask[p_inv]
         if ACOUSTIC:
-            vad = vad[p_inv]
+            vadSegsXUtt = vadSegsXUtt[p_inv]
         pSegs = pSegs[p_inv]
         segsProposal = segsProposal[p_inv]
         segProbs = segProbs[p_inv]
@@ -1459,7 +1459,7 @@ if __name__ == "__main__":
                             gold,
                             segsProposalXDoc,
                             logdir,
-                            intervals = intervals if ACOUSTIC else None,
+                            vadIntervals= vadIntervals if ACOUSTIC else None,
                             acoustic = ACOUSTIC,
                             print_headers= not os.path.isfile(logdir + '/log_train.txt'),
                             filename= 'log_train.txt')
@@ -1479,18 +1479,18 @@ if __name__ == "__main__":
 
         sig.disallow_interrupt()
         if ACOUSTIC:
-            if GOLDWRD:
+            if goldWrdFile:
                 segScores['wrd']['##overall##'][1] = precision_recall_f(*segScores['wrd']['##overall##'][0])
                 segScores['wrd']['##overall##'][3] = precision_recall_f(*segScores['wrd']['##overall##'][2])
                 print('Word segmentation scores:')
                 printSegScores(segScore['wrd'], ACOUSTIC)
-            if GOLDPHN:
+            if goldPhnFile:
                 segScores['phn']['##overall##'][1] = precision_recall_f(*segScores['phn']['##overall##'][0])
                 segScores['phn']['##overall##'][3] = precision_recall_f(*segScores['phn']['##overall##'][2])
                 print('Phone segmentation scores:')
                 printSegScores(segScore['phn'], ACOUSTIC)
-            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_dir=logdir, TextGrid=False, dataset='train')
-            writeTimeSegs(frameSegs2timeSegs(intervals, segsProposalXDoc), out_dir=logdir, TextGrid=True, dataset='train')
+            writeTimeSegs(segs2Intervals(segsProposalXDoc, vadIntervals), out_dir=logdir, TextGrid=False, dataset='train')
+            writeTimeSegs(segs2Intervals(segsProposalXDoc, vadIntervals), out_dir=logdir, TextGrid=True, dataset='train')
         else:
             printSegScores(getSegScores(gold, segsProposalXDoc, ACOUSTIC), ACOUSTIC)
             writeCharSegs(logdir, segsProposalXDoc[doc_list[0]], gold[doc_list[0]], filename='seg_train.txt')
@@ -1595,14 +1595,14 @@ if __name__ == "__main__":
                          acoustic=ACOUSTIC)
 
         if ACOUSTIC:
-            if GOLDWRD:
+            if goldWrdFile:
                 print('Gold word segmentations')
-                _, goldseg = timeSegs2frameSegs(GOLDWRD)
-                goldsegXUtt = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+                _, goldseg = readSegFile(goldWrdFile)
+                goldsegXUtt = frameSeqs2FrameSeqsXUtt(goldseg, vadSegs, maxChar, doc_indices)
             else:
                 print('Gold phone segmentations')
-                _, goldseg = timeSegs2frameSegs(GOLDPHN)
-                goldsegXUtt = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+                _, goldseg = readSegFile(goldPhnFile)
+                goldsegXUtt = frameSeqs2FrameSeqsXUtt(goldseg, vadSegs, maxChar, doc_indices)
         else:
             print('Gold word segmentations')
             goldsegXUtt = texts2Segs(gold, maxChar)
@@ -1618,10 +1618,10 @@ if __name__ == "__main__":
                          acoustic=ACOUSTIC)
 
 
-        if ACOUSTIC and GOLDWRD and GOLDPHN:
+        if ACOUSTIC and goldWrdFile and goldPhnFile:
             print('Gold phone segmentations')
-            _, goldseg = timeSegs2frameSegs(GOLDPHN)
-            goldsegXUtt = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+            _, goldseg = readSegFile(goldPhnFile)
+            goldsegXUtt = frameSeqs2FrameSeqsXUtt(goldseg, vadSegs, maxChar, doc_indices)
 
             printSegAnalysis(ae,
                              Xs,

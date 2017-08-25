@@ -1062,7 +1062,7 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
                  iteration, batch_num, reverseUtt=False, batch_size=128, nResample=None, acoustic=False, ae=None,
                  segmenter=None, debug=False):
     if acoustic:
-        intervals, GOLDWRD, GOLDPHN, vad = otherParams
+        vadIntervals, GOLDWRD, GOLDPHN, vad = otherParams
     else:
         ctable = otherParams
     ae_net = ae != None
@@ -1125,7 +1125,7 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
                         gold,
                         segs4evalXDoc,
                         logdir,
-                        intervals = intervals if acoustic else None,
+                        vadIntervals= vadIntervals if acoustic else None,
                         acoustic = acoustic,
                         print_headers = not os.path.isfile(logdir + '/log_cv.txt'),
                         filename = 'log_cv.txt')
@@ -1147,8 +1147,8 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
             print('Phone segmentation scores:')
             printSegScores(segScore['phn'], acoustic)
         print('Writing solutions to file')
-        writeTimeSegs(frameSegs2timeSegs(intervals, segs4evalXDoc), out_dir=logdir, TextGrid=False, dataset='cv')
-        writeTimeSegs(frameSegs2timeSegs(intervals, segs4evalXDoc), out_dir=logdir, TextGrid=True, dataset='cv')
+        writeTimeSegs(segs2Intervals(segs4evalXDoc, vadIntervals), out_dir=logdir, TextGrid=False, dataset='cv')
+        writeTimeSegs(segs2Intervals(segs4evalXDoc, vadIntervals), out_dir=logdir, TextGrid=True, dataset='cv')
     else:
         print('Writing solutions to file')
         printSegScores(getSegScores(gold, segs4evalXDoc, acoustic), acoustic)

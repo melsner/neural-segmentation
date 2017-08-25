@@ -17,26 +17,73 @@ from echo_words import CharacterTable
 ##################################################################################
 ##################################################################################
 
+def readSegFile(timeseg_file):
+    intervals = {}
+    speech = {}
+    offsets = {}
+    seg = 0
+    with open(timeseg_file, 'rb') as f:
+        lines = f.readlines()
+        lines.sort(key = lambda x: float(x.strip().split()[1]))
+    for line in lines:
+        if line.strip() != '':
+            doc, start, end = line.strip().split()[:3]
+            if doc in intervals:
+                if float(start) <= intervals[doc][-1][1]:
+                    intervals[doc][-1] = (intervals[doc][-1][0],float(end))
+                else:
+                    intervals[doc].append((float(start),float(end)))
+            else:
+                intervals[doc] = [(float(start),float(end))]
+            s, e = int(np.rint(float(start)*100)), int(np.rint(float(end)*100))
+            if doc in speech:
+                last = speech[doc][-1][1] + offsets.get(doc, 0)
+            else:
+                last = 0
+            if last < s:
+                seg = 1
+                if doc in offsets:
+                    offsets[doc] += s - last
+                else:
+                    offsets[doc] = s - last
+            else:
+                seg = 0
+            offset = offsets.get(doc, 0)
+            if doc in speech:
+                # In rare cases, the segmentation file
+                # contains a start time earlier than previous
+                # interval's end time, requiring us to check this.
+                s = max(s,speech[doc][-1][1])
+                speech[doc].append((s-offset,e-offset,seg))
+            else:
+                speech[doc] = [(s-offset,e-offset,seg)]
+
+    segs = {}
+    for doc in speech:
+        segs[doc] = np.zeros((speech[doc][-1][1]))
+        for seg in speech[doc]:
+            segs[doc][seg[0]] = 1.0
+
+    return intervals, segs
+
 def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, debug=False, scoreInit=False):
     if not dataDir.endswith('/'):
         dataDir += '/'
     if acoustic:
-        segfile_paths = [dataDir + x for x in os.listdir(dataDir) if x.endswith('_vad.txt')]
+        vadfile_paths = [dataDir + x for x in os.listdir(dataDir) if x.endswith('_vad.txt')]
         goldwrd_paths = [dataDir + x for x in os.listdir(dataDir) if x.endswith('.wrd')]
         goldphn_paths = [dataDir + x for x in os.listdir(dataDir) if x.endswith('.phn')]
-        SEGFILE = segfile_paths[0] if len(segfile_paths) > 0 else None
-        GOLDWRD = goldwrd_paths[0] if len(goldwrd_paths) > 0 else None
-        GOLDPHN = goldphn_paths[0] if len(goldphn_paths) > 0 else None
-        assert SEGFILE and (GOLDWRD or GOLDPHN), \
+        segFile = vadfile_paths[0] if len(vadfile_paths) > 0 else None
+        goldWrdFile = goldwrd_paths[0] if len(goldwrd_paths) > 0 else None
+        goldPhnFile = goldphn_paths[0] if len(goldphn_paths) > 0 else None
+        assert segFile and (goldWrdFile or goldPhnFile), \
             'Files containing initial and gold segmentations are required in acoustic mode.'
-        if 'intervals' in checkpoint and 'segs_init' in checkpoint:
-            intervals, segs_init = checkpoint['intervals'], checkpoint['segs_init']
+        if 'vadIntervals' in checkpoint and 'vadSegs' in checkpoint:
+            vadIntervals, vadSegs = checkpoint['vadIntervals'], checkpoint['vadSegs']
         else:
-            intervals, segs_init = timeSegs2frameSegs(SEGFILE)
-            checkpoint['intervals'] = intervals
-            checkpoint['segs_init'] = segs_init
-        vadBreaks = checkpoint.get('vadBreaks', intervals2ForcedSeg(intervals))
-        checkpoint['vadBreaks'] = vadBreaks
+            vadIntervals, vadSegs = readSegFile(segFile)
+            checkpoint['vadIntervals'] = vadIntervals
+            checkpoint['vadSegs'] = vadSegs
         if 'raw' in checkpoint:
             raw = checkpoint['raw']
             total = checkpoint['total']
@@ -44,30 +91,30 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
         else:
             raw, FRAME_SIZE = readMFCCs(dataDir)
             mfccs = raw
-            raw, total = filterMFCCs(raw, intervals, segs_init, FRAME_SIZE)
+            raw, total = filterMFCCs(raw, vadIntervals, FRAME_SIZE)
             checkpoint['raw'] = raw
             checkpoint['total'] = total
         print('Total speech frames: %s' %total)
         # for doc in raw:
         #     print(doc)
         #     print(len(mfccs[doc]))
-        #     print(intervals[doc][-1])
+        #     print(vadIntervals[doc][-1])
         if 'gold' in checkpoint:
             gold = checkpoint['gold']
         else:
             gold = {'wrd': None, 'phn': None}
-            if GOLDWRD:
-                gold['wrd'] = readGoldFrameSeg(GOLDWRD)
-            if GOLDPHN:
-                gold['phn'] = readGoldFrameSeg(GOLDPHN)
+            if goldWrdFile:
+                gold['wrd'] = readGoldFrameSeg(goldWrdFile)
+            if goldPhnFile:
+                gold['phn'] = readGoldFrameSeg(goldPhnFile)
             checkpoint['gold'] = gold
-        if GOLDWRD:
+        if goldWrdFile:
             goldWrdSegCts = 0
             for doc in gold['wrd']:
                 goldWrdSegCts += len(gold['wrd'][doc])
             print('Total words: %d' % goldWrdSegCts)
             print('Mean word length: %.2f' %(float(total)/goldWrdSegCts))
-        if GOLDPHN:
+        if goldPhnFile:
             goldPhnSegCts = 0
             for doc in gold['phn']:
                 goldPhnSegCts += len(gold['phn'][doc])
@@ -77,11 +124,11 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
         if scoreInit:
             if gold['wrd']:
                 print('Initial word segmentation scores:')
-                printSegScores(getSegScores(gold['wrd'], frameSegs2timeSegs(intervals, segs_init), 0.03, acoustic), True)
+                printSegScores(getSegScores(gold['wrd'], segs2Intervals(vadSegs, vadIntervals), 0.03, acoustic), True)
                 print()
             if gold['phn']:
                 print('Initial phone segmentation scores:')
-                printSegScores(getSegScores(gold['phn'], frameSegs2timeSegs(intervals, segs_init), 0.02, acoustic), True)
+                printSegScores(getSegScores(gold['phn'], segs2Intervals(vadSegs, vadIntervals), 0.02, acoustic), True)
                 print()
 
 
@@ -114,7 +161,7 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
             raw_cts[doc] = sum([len(utt) for utt in raw[doc]])
     raw_total = sum([raw_cts[doc] for doc in raw_cts])
     ## Xs: segmenter input (unsegmented input sequences by utterance)
-    Xs, doc_indices = frameInputs2Utts(raw, vadBreaks, maxChar) if acoustic else texts2Xs(raw, maxChar, ctable)
+    Xs, doc_indices = processAcousticDocuments(raw, vadSegs, maxChar) if acoustic else texts2Xs(raw, maxChar, ctable)
     if debug and not acoustic:
         n = 20
         print('Character reconstruction check:')
@@ -140,16 +187,16 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
             Xs_mask[s:e] = Xs_mask_doc
 
     if acoustic:
-        vad = frameSegs2FrameSegsXUtt(vadBreaks, vadBreaks, maxChar, doc_indices)
+        vadSegsXUtt = frameSeqs2FrameSeqsXUtt(vadSegs, vadSegs, maxChar, doc_indices)
 
     if scoreInit:
         segs4evalXDoc = dict.fromkeys(doc_list)
 
         if acoustic:
-            if GOLDWRD:
+            if goldWrdFile:
                 prob = float(goldWrdSegCts)/total
                 pSegs = prob * np.ones((len(Xs), maxChar, 1))
-                pSegs[np.where(vad)] = 1.
+                pSegs[np.where(vadSegsXUtt)] = 1.
                 pSegs[np.where(Xs_mask)] = 0.
                 segs = sampleSeg(pSegs, acoustic)
                 for doc in segs4evalXDoc:
@@ -158,24 +205,24 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
                     if acoustic:
                         masked_proposal = np.ma.array(segs4evalXDoc[doc], mask=Xs_mask[s:e])
                         segs4evalXDoc[doc] = masked_proposal.compressed()
-                segs4evalXDoc = frameSegs2timeSegs(intervals, segs4evalXDoc)
+                segs4evalXDoc = segs2Intervals(segs4evalXDoc, vadIntervals)
                 print('Random segmentations at same rate as gold words:')
                 printSegScores(getSegScores(gold['wrd'], segs4evalXDoc, tol=.03, acoustic=acoustic), acoustic=acoustic)
-                _, goldseg = timeSegs2frameSegs(GOLDWRD)
-                Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+                _, goldseg = readSegFile(goldWrdFile)
+                Y = frameSeqs2FrameSeqsXUtt(goldseg, vadSegs, maxChar, doc_indices)
                 for doc in segs4evalXDoc:
                     s, e = doc_indices[doc]
                     segs4evalXDoc[doc] = Y[s:e]
                     if acoustic:
                         masked_proposal = np.ma.array(segs4evalXDoc[doc], mask=Xs_mask[s:e])
                         segs4evalXDoc[doc] = masked_proposal.compressed()
-                segs4evalXDoc = frameSegs2timeSegs(intervals, segs4evalXDoc)
+                segs4evalXDoc = segs2Intervals(segs4evalXDoc, vadIntervals)
                 print('Gold word segmentations:')
                 printSegScores(getSegScores(gold['wrd'], segs4evalXDoc, tol=.03, acoustic=acoustic), acoustic=acoustic)
-            if GOLDPHN:
+            if goldPhnFile:
                 prob = float(goldPhnSegCts)/total
                 pSegs = prob * np.ones((len(Xs), maxChar, 1))
-                pSegs[np.where(vad)] = 1.
+                pSegs[np.where(vadSegsXUtt)] = 1.
                 pSegs[np.where(Xs_mask)] = 0.
                 segs = sampleSeg(pSegs, acoustic)
                 for doc in segs4evalXDoc:
@@ -184,18 +231,18 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
                     if acoustic:
                         masked_proposal = np.ma.array(segs4evalXDoc[doc], mask=Xs_mask[s:e])
                         segs4evalXDoc[doc] = masked_proposal.compressed()
-                segs4evalXDoc = frameSegs2timeSegs(intervals, segs4evalXDoc)
+                segs4evalXDoc = segs2Intervals(vadIntervals, segs4evalXDoc)
                 print('Random segmentations at same rate as gold phones:')
                 printSegScores(getSegScores(gold['phn'], segs4evalXDoc, tol=.02, acoustic=acoustic), acoustic=acoustic)
-                _, goldseg = timeSegs2frameSegs(GOLDPHN)
-                Y = frameSegs2FrameSegsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+                _, goldseg = readSegFile(goldPhnFile)
+                Y = frameSeqs2FrameSeqsXUtt(goldseg, vadSegs, maxChar, doc_indices)
                 for doc in segs4evalXDoc:
                     s, e = doc_indices[doc]
                     segs4evalXDoc[doc] = Y[s:e]
                     if acoustic:
                         masked_proposal = np.ma.array(segs4evalXDoc[doc], mask=Xs_mask[s:e])
                         segs4evalXDoc[doc] = masked_proposal.compressed()
-                segs4evalXDoc = frameSegs2timeSegs(intervals, segs4evalXDoc)
+                segs4evalXDoc = segs2Intervals(segs4evalXDoc, vadIntervals)
                 print('Gold phone segmentation')
                 printSegScores(getSegScores(gold['phn'], segs4evalXDoc, tol=.03, acoustic=acoustic), acoustic=acoustic)
         else:
@@ -212,7 +259,7 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
                     segs4evalXDoc[doc] = masked_proposal.compressed()
             printSegScores(getSegScores(gold, segs4evalXDoc, acoustic=acoustic), acoustic=acoustic)
 
-    return doc_indices, doc_list, charDim, raw_total, Xs, Xs_mask, gold, (intervals, vad, vadBreaks, SEGFILE, GOLDWRD, GOLDPHN) if acoustic else ctable
+    return doc_indices, doc_list, charDim, raw_total, Xs, Xs_mask, gold, (vadIntervals, vadSegs, vadSegsXUtt, segFile, goldWrdFile, goldPhnFile) if acoustic else ctable
 
 def readText(path, cutoff=inf):
     i = 0
@@ -340,7 +387,7 @@ def readMFCCs(path, filter_file=None):
 ##################################################################################
 
 def writeLog(batch_num_global, iteration, epochAELoss, epochAcc, epochSegLoss, epochDel, epochOneL, epochSeg, gold,
-             segsProposal, logdir, intervals=None, acoustic=False, print_headers=False, filename='log.txt'):
+             segsProposal, logdir, vadIntervals=None, acoustic=False, print_headers=False, filename='log.txt'):
     headers = ['Batch', 'Iteration']
     outVar = [batch_num_global, iteration]
     if epochAELoss != None:
@@ -361,7 +408,7 @@ def writeLog(batch_num_global, iteration, epochAELoss, epochAcc, epochSegLoss, e
     headers.append('NumSeg')
     outVar.append(epochSeg)
     if acoustic:
-        segsProposal = frameSegs2timeSegs(intervals, segsProposal)
+        segsProposal = segs2Intervals(segsProposal, vadIntervals)
         scores = {'wrd': None, 'phn': None}
         if gold['wrd']:
             headers += ['bp_wrd', 'br_wrd', 'bf_wrd', 'swp_wrd', 'swr_wrd', 'swf_wrd']
