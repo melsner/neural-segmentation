@@ -1,6 +1,7 @@
 from __future__ import print_function, division
 from data_handling import *
 from sampling import *
+from ae_io import readSegFile
 from network import *
 import time
 
@@ -17,15 +18,16 @@ import time
 ##################################################################################
 
 def testFullAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_indices, utt_ids, logdir,
-                         reverseUtt=False, batch_size=128, nResample=None, trainIters=100, vadBreaks=None, ctable=None,
-                         gold=None, segLevel=None, acoustic=False, fitParts=True, fitFull=True, debug=False):
+                         reverseUtt=False, batch_size=128, nResample=None, trainIters=100, vadSegs=None, ctable=None,
+                         gold=None, segLevel=None, acoustic=False, fitParts=True, fitFull=True, vadRegionsAsUtts=False,
+                         debug=False):
     assert acoustic or ctable is not None, 'ctable object must be provided to testFullAEOnFixedSeg() in character mode'
-    assert not acoustic or vadBreaks is not None, 'vadBreaks object must be provided to testFullAEOnFixedSeg() in acoustic mode'
+    assert not acoustic or vadSegs is not None, 'vadBreaks object must be provided to testFullAEOnFixedSeg() in acoustic mode'
 
     if gold is not None:
         if acoustic:
             _, goldseg = readSegFile(gold)
-            Y = frameSeqs2FrameSeqsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+            Y = frameSeqs2FrameSeqsXUtt(goldseg, maxChar, doc_indices, vadSegs=vadSegs if vadRegionsAsUtts else None)
         else:
             Y = texts2Segs(gold, maxChar)
     else:
@@ -113,12 +115,12 @@ def testFullAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_in
 ##################################################################################
 
 def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, utt_ids, logdir, reverseUtt=False,
-                         batch_size=128, nResample=None, trainIters=100, vadBreaks=None, ctable=None, gold=None,
-                         segLevel=None, acoustic=False, debug=False):
+                         batch_size=128, nResample=None, trainIters=100, vadSegs=None, ctable=None, gold=None,
+                         segLevel=None, acoustic=False, vadRegionsAsUtts=False, debug=False):
     if gold is not None:
         if acoustic:
             _, goldseg = readSegFile(gold)
-            Y = frameSeqs2FrameSeqsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+            Y = frameSeqs2FrameSeqsXUtt(goldseg, maxChar, doc_indices, vadSegs=vadSegs if vadRegionsAsUtts else None)
         else:
             Y = texts2Segs(gold, maxChar)
     else:
@@ -207,12 +209,12 @@ def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, u
 ##################################################################################
 
 def testSegmenterOnFixedSeg(segmenter, Xs, Xs_mask, pSegs, maxChar, doc_indices, utt_ids, logdir, trainIters=100,
-                            batch_size=128, vadBreaks=None, vad=None, intervals=None, gold=None, goldEval=None,
-                            segLevel=None, acoustic=False, debug=False):
+                            batch_size=128, vadSegs=None, vadSegsXUtt=None, vadIntervals=None, gold=None, goldEval=None,
+                            segLevel=None, acoustic=False, vadRegionsAsUtts=False, debug=False):
     if gold:
         if acoustic:
             _, goldseg = readSegFile(gold)
-            Y = frameSeqs2FrameSeqsXUtt(goldseg, vadBreaks, maxChar, doc_indices)
+            Y = frameSeqs2FrameSeqsXUtt(goldseg, maxChar, doc_indices, vadSegs=vadSegs if vadRegionsAsUtts else None)
         else:
             Y = texts2Segs(gold, maxChar)
     else:
@@ -228,6 +230,9 @@ def testSegmenterOnFixedSeg(segmenter, Xs, Xs_mask, pSegs, maxChar, doc_indices,
     segmenter.load(logdir, suffix='_init')
 
     for i in range(trainIters):
+        t0 = time.time()
+        print('Iteration %d' % (i + 1))
+
         segmenter.trainOnFixed(Xs,
                                Xs_mask,
                                Y,
@@ -241,7 +246,7 @@ def testSegmenterOnFixedSeg(segmenter, Xs, Xs_mask, pSegs, maxChar, doc_indices,
         segsProposal = (preds > 0.5) * np.expand_dims(1-Xs_mask, -1)
 
         if acoustic:
-            segsProposal[np.where(vad)] = 1.
+            segsProposal[np.where(vadSegsXUtt)] = 1.
         else:
             segsProposal[:, 0, ...] = 1.
         for doc in proposalsXDoc:
@@ -260,8 +265,8 @@ def testSegmenterOnFixedSeg(segmenter, Xs, Xs_mask, pSegs, maxChar, doc_indices,
                     s, e = doc_indices[doc]
                     masked_target = np.ma.array(Y[s:e], mask=Xs_mask[s:e])
                     targetsXDoc[doc] = masked_target.compressed()
-                targetsXDoc = segs2Intervals(targetsXDoc, intervals)
-                proposalsXDoc = segs2Intervals(proposalsXDoc, intervals)
+                targetsXDoc = segs2Intervals(targetsXDoc, vadIntervals)
+                proposalsXDoc = segs2Intervals(proposalsXDoc, vadIntervals)
             else:
                 for doc in targetsXDoc:
                     s, e = doc_indices[doc]
@@ -284,8 +289,10 @@ def testSegmenterOnFixedSeg(segmenter, Xs, Xs_mask, pSegs, maxChar, doc_indices,
                        i+1,
                        batch_size=batch_size)
 
+        t1 = time.time()
 
-
+        print('Iteration time: %.2fs' % (t1 - t0))
+        print()
 
 
 ##################################################################################
@@ -300,7 +307,7 @@ def testUnits(Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_indices, utt_ids,
               batch_size=128, nResample=None, trainIters=100, supervisedAE=False, supervisedAEPhon=False,
               supervisedSegmenter=False, ae=None, segmenter=None, vadSegs=None, vadSegsXUtt=None, vadIntervals=None,
               ctable=None, gold=None, goldEval=None, segLevel=None, acoustic=False, fitParts=True, fitFull=False,
-              debug=False):
+              vadRegionsAsUtts=False, debug=False):
     if supervisedAE:
         testFullAEOnFixedSeg(ae,
                              Xs,
@@ -316,13 +323,14 @@ def testUnits(Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_indices, utt_ids,
                              batch_size=batch_size,
                              nResample=nResample,
                              trainIters=trainIters,
-                             vadBreaks=vadSegs,
+                             vadSegs=vadSegs,
                              ctable=ctable,
                              gold=gold,
                              segLevel=segLevel,
                              acoustic=acoustic,
                              fitParts=fitParts,
                              fitFull=fitFull,
+                             vadRegionsAsUtts=vadRegionsAsUtts,
                              debug=debug)
 
     if supervisedAEPhon:
@@ -339,11 +347,12 @@ def testUnits(Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_indices, utt_ids,
                              batch_size=batch_size,
                              nResample=nResample,
                              trainIters=trainIters,
-                             vadBreaks=vadSegs,
+                             vadSegs=vadSegs,
                              ctable=ctable,
                              gold=gold,
                              segLevel=segLevel,
                              acoustic=acoustic,
+                             vadRegionsAsUtts=vadRegionsAsUtts,
                              debug=debug)
 
     if supervisedSegmenter:
@@ -357,11 +366,12 @@ def testUnits(Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_indices, utt_ids,
                                 logdir,
                                 trainIters=trainIters,
                                 batch_size=batch_size,
-                                vadBreaks=vadSegs,
-                                vad=vadSegsXUtt,
-                                intervals=vadIntervals,
+                                vadSegs=vadSegs,
+                                vadSegsXUtt=vadSegsXUtt,
+                                vadIntervals=vadIntervals,
                                 gold=gold,
                                 goldEval=goldEval,
                                 segLevel=segLevel,
                                 acoustic=acoustic,
+                                vadRegionsAsUtts=vadRegionsAsUtts,
                                 debug=debug)

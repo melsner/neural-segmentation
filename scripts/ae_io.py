@@ -66,7 +66,8 @@ def readSegFile(timeseg_file):
 
     return intervals, segs
 
-def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, debug=False, scoreInit=False):
+def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, debug=False,
+                    vadRegionsAsUtts=False, scoreInit=False):
     if not dataDir.endswith('/'):
         dataDir += '/'
     if acoustic:
@@ -161,7 +162,8 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
             raw_cts[doc] = sum([len(utt) for utt in raw[doc]])
     raw_total = sum([raw_cts[doc] for doc in raw_cts])
     ## Xs: segmenter input (unsegmented input sequences by utterance)
-    Xs, doc_indices = processAcousticDocuments(raw, vadSegs, maxChar) if acoustic else texts2Xs(raw, maxChar, ctable)
+    Xs, doc_indices = processAcousticDocuments(raw, maxChar, vadSegs=vadSegs if vadRegionsAsUtts else None) \
+                      if acoustic else texts2Xs(raw, maxChar, ctable)
     if debug and not acoustic:
         n = 20
         print('Character reconstruction check:')
@@ -187,7 +189,7 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
             Xs_mask[s:e] = Xs_mask_doc
 
     if acoustic:
-        vadSegsXUtt = frameSeqs2FrameSeqsXUtt(vadSegs, vadSegs, maxChar, doc_indices)
+        vadSegsXUtt = frameSeqs2FrameSeqsXUtt(vadSegs, maxChar, doc_indices, vadSegs=vadSegs if vadRegionsAsUtts else None)
 
     if scoreInit:
         segs4evalXDoc = dict.fromkeys(doc_list)
@@ -209,7 +211,7 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
                 print('Random segmentations at same rate as gold words:')
                 printSegScores(getSegScores(gold['wrd'], segs4evalXDoc, tol=.03, acoustic=acoustic), acoustic=acoustic)
                 _, goldseg = readSegFile(goldWrdFile)
-                Y = frameSeqs2FrameSeqsXUtt(goldseg, vadSegs, maxChar, doc_indices)
+                Y = frameSeqs2FrameSeqsXUtt(goldseg, maxChar, doc_indices, vadSegs=vadSegs if vadRegionsAsUtts else None)
                 for doc in segs4evalXDoc:
                     s, e = doc_indices[doc]
                     segs4evalXDoc[doc] = Y[s:e]
@@ -235,7 +237,7 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
                 print('Random segmentations at same rate as gold phones:')
                 printSegScores(getSegScores(gold['phn'], segs4evalXDoc, tol=.02, acoustic=acoustic), acoustic=acoustic)
                 _, goldseg = readSegFile(goldPhnFile)
-                Y = frameSeqs2FrameSeqsXUtt(goldseg, vadSegs, maxChar, doc_indices)
+                Y = frameSeqs2FrameSeqsXUtt(goldseg, maxChar, doc_indices, vadSegs=vadSegs if vadRegionsAsUtts else None)
                 for doc in segs4evalXDoc:
                     s, e = doc_indices[doc]
                     segs4evalXDoc[doc] = Y[s:e]

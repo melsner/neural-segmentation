@@ -261,6 +261,7 @@ if __name__ == "__main__":
     LATENT_DIM = checkpoint.get('latentDim', int(args.latentDim) if args.latentDim else 5 if ACOUSTIC else 2)
     if SEG_NET and not AE_NET:
         METRIC = 'logprobbinary'
+    VAD_REGIONS_AS_UTTS = True
 
     annealer = Annealer(ANNEAL_TEMP, ANNEAL_RATE)
 
@@ -332,7 +333,12 @@ if __name__ == "__main__":
 
     print()
     print('Pre-processing training data')
-    doc_indices, doc_list, charDim, raw_total, Xs, Xs_mask, gold, other = processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=ACOUSTIC)
+    doc_indices, doc_list, charDim, raw_total, Xs, Xs_mask, gold, other = processInputDir(dataDir,
+                                                                                          checkpoint,
+                                                                                          maxChar,
+                                                                                          ctable=None,
+                                                                                          acoustic=ACOUSTIC,
+                                                                                          vadRegionsAsUtts=VAD_REGIONS_AS_UTTS)
     if ACOUSTIC:
         vadIntervals, vadSegs, vadSegsXUtt, vadFile, goldWrdFile, goldPhnFile = other
     else:
@@ -341,7 +347,12 @@ if __name__ == "__main__":
     if crossValDir:
         print()
         print('Pre-processing cross-validation data')
-        doc_indices_cv, doc_list_cv, charDim_cv, raw_total_cv, Xs_cv, Xs_mask_cv, gold_cv, other_cv = processInputDir(crossValDir, checkpoint, maxChar, ctable=ctable if not ACOUSTIC else None, acoustic=ACOUSTIC)
+        doc_indices_cv, doc_list_cv, charDim_cv, raw_total_cv, Xs_cv, Xs_mask_cv, gold_cv, other_cv = processInputDir(crossValDir,
+                                                                                                                      checkpoint,
+                                                                                                                      maxChar,
+                                                                                                                      ctable=ctable if not ACOUSTIC else None,
+                                                                                                                      acoustic=ACOUSTIC,
+                                                                                                                      vadRegionsAsUtts=VAD_REGIONS_AS_UTTS)
         assert charDim == charDim_cv, 'ERROR: Training and cross-validation data have different dimensionality (%i, %i)' %(charDim, charDim_cv)
         if ACOUSTIC:
             vadIntervals_cv, vadSegs_cv, vadSegsXUtt_cv, vadFile_cv, goldWrdFile_cv, goldPhnFile_cv = other_cv
@@ -492,7 +503,7 @@ if __name__ == "__main__":
               '--segWt %s' % SEG_WT,
               '--nSamples %s' % N_SAMPLES,
               '--batchSize %s' % BATCH_SIZE,
-              '--samplingBatchSize %s' % BATCH_SIZE,
+              '--samplingBatchSize %s' % SAMPLING_BATCH_SIZE,
               '--initialSegProb %s' % INITIAL_SEG_PROB,
               '--interpolationRate %s' % INTERPOLATION_RATE,
               '--logfile %s' % logdir[5:],
@@ -852,6 +863,7 @@ if __name__ == "__main__":
         segmenter = Segmenter(segmenter, seg_shift=SEG_SHIFT, charDim=charDim)
 
     ## SAVE/LOAD WEIGHTS
+    sig.disallow_interrupt()
     if AE_NET:
         ## Save current model weights for reinitalization if needed
         RESUME_AE = ae.load(logdir)
@@ -866,6 +878,7 @@ if __name__ == "__main__":
             # sess.run(tf.global_variables_initializer())
             segmenter.save(logdir, suffix='_init')
             segmenter.save(logdir)
+    sig.allow_interrupt()
 
 
 
@@ -916,6 +929,7 @@ if __name__ == "__main__":
                       acoustic=ACOUSTIC,
                       fitFull=FIT_FULL,
                       fitParts=FIT_PARTS,
+                      vadRegionsAsUtts=VAD_REGIONS_AS_UTTS,
                       debug=DEBUG)
 
         ## Gold segmentations (phone if acoustic)
@@ -950,6 +964,7 @@ if __name__ == "__main__":
                       acoustic=ACOUSTIC,
                       fitFull=FIT_FULL,
                       fitParts=FIT_PARTS,
+                      vadRegionsAsUtts=VAD_REGIONS_AS_UTTS,
                       debug=DEBUG)
 
         ## Gold word segmentations (if acoustic)
@@ -984,6 +999,7 @@ if __name__ == "__main__":
                       acoustic=ACOUSTIC,
                       fitFull=FIT_FULL,
                       fitParts=FIT_PARTS,
+                      vadRegionsAsUtts=VAD_REGIONS_AS_UTTS,
                       debug=DEBUG)
 
         exit()
@@ -1097,6 +1113,7 @@ if __name__ == "__main__":
             pretrain = False
             iteration = 0
 
+        sig.disallow_interrupt()
         if AE_NET:
             ae.save(logdir)
         if SEG_NET and not AE_NET:
@@ -1105,17 +1122,20 @@ if __name__ == "__main__":
             checkpoint['iteration'] = iteration
             checkpoint['pretrain'] = pretrain
             pickle.dump(checkpoint, f)
+        sig.allow_interrupt()
 
         t1 = time.time()
         print('Iteration time: %.2fs' %(t1-t0))
         print()
 
     ## Pretraining finished, update checkpoint
+    sig.disallow_interrupt()
     print('Saving restore point')
     with open(logdir + '/checkpoint.obj', 'wb') as f:
         checkpoint['pretrain'] = pretrain
         checkpoint['iteration'] = iteration
         pickle.dump(checkpoint, f)
+    sig.allow_interrupt()
 
     segScores = {'wrd': dict.fromkeys(doc_list), 'phn': dict.fromkeys(doc_list)}
     segScores['wrd']['##overall##'] = [(0,0,0), None, (0,0,0), None]
@@ -1229,7 +1249,7 @@ if __name__ == "__main__":
                 if iteration < trainNoSegIters:
                     segs_batch = sampleSeg(pSegs_batch)
                 else:
-                    segs_batch = sampleSeg(pSegs_batch, acoustic=ACOUSTIC, resamplePSegs=ACOUSTIC)
+                    segs_batch = sampleSeg(pSegs_batch) #, acoustic=ACOUSTIC, resamplePSegs=ACOUSTIC)
                 segSamples_batch[:,s,:] = np.squeeze(segs_batch, -1)
 
                 if AE_NET:
@@ -1355,6 +1375,8 @@ if __name__ == "__main__":
             b += SAMPLING_BATCH_SIZE
             batch_num_global += 1
 
+            sig.disallow_interrupt()
+
             if batch_num_global % SAVE_FREQ == 0:
                 print('Saving restore point')
                 if AE_NET:
@@ -1380,7 +1402,6 @@ if __name__ == "__main__":
                     pickle.dump(checkpoint, f)
 
             ## Evaluate on cross-validation set
-            sig.disallow_interrupt()
             if crossValDir and (batch_num_global % EVAL_FREQ == 0):
                 if ACOUSTIC:
                     otherParams = vadIntervals_cv, goldWrdFile_cv, goldPhnFile_cv, vadSegsXUtt_cv
@@ -1598,11 +1619,11 @@ if __name__ == "__main__":
             if goldWrdFile:
                 print('Gold word segmentations')
                 _, goldseg = readSegFile(goldWrdFile)
-                goldsegXUtt = frameSeqs2FrameSeqsXUtt(goldseg, vadSegs, maxChar, doc_indices)
+                goldsegXUtt = frameSeqs2FrameSeqsXUtt(goldseg, maxChar, doc_indices, vadSegs=vadSegs if VAD_REGIONS_AS_UTTS else None)
             else:
                 print('Gold phone segmentations')
                 _, goldseg = readSegFile(goldPhnFile)
-                goldsegXUtt = frameSeqs2FrameSeqsXUtt(goldseg, vadSegs, maxChar, doc_indices)
+                goldsegXUtt = frameSeqs2FrameSeqsXUtt(goldseg, maxChar, doc_indices, vadSegs=vadSegs if VAD_REGIONS_AS_UTTS else None)
         else:
             print('Gold word segmentations')
             goldsegXUtt = texts2Segs(gold, maxChar)
@@ -1621,7 +1642,7 @@ if __name__ == "__main__":
         if ACOUSTIC and goldWrdFile and goldPhnFile:
             print('Gold phone segmentations')
             _, goldseg = readSegFile(goldPhnFile)
-            goldsegXUtt = frameSeqs2FrameSeqsXUtt(goldseg, vadSegs, maxChar, doc_indices)
+            goldsegXUtt = frameSeqs2FrameSeqsXUtt(goldseg, maxChar, doc_indices, vadSegs=vadSegs if VAD_REGIONS_AS_UTTS else None)
 
             printSegAnalysis(ae,
                              Xs,

@@ -264,13 +264,13 @@ class AE(object):
     ## Slower but more memory efficient
     def evaluateB(self, input, target, batch_size=128, verbose=0):
         if verbose != 0:
-            print('Encoding words')
+            print('Encoding word sequences')
         output = self.embed_words(input, learning_phase=0, batch_size=batch_size, verbose=verbose)
         if verbose != 0:
-            print('Encoding/decoding utterance')
+            print('Encoding/decoding utterances')
         output = self.utt.predict(output, batch_size=batch_size, verbose=verbose)
         if verbose != 0:
-            print('Decoding utterance')
+            print('Decoding word sequences')
         output = self.words_decoder.evaluate([output, input], target, batch_size=batch_size, verbose=verbose)
         if type(output) is not list:
             output = [output]

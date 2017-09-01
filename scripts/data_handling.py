@@ -468,48 +468,50 @@ def getNextFrameUtt(vadSegs, maxChar, start_ix=0):
              + np.argmax(vadSegs[start_ix+1:start_ix+maxChar]) if (vadSegs[start_ix+1:start_ix+maxChar].sum() > 0) else min(len(vadSegs), start_ix+maxChar)
     return end_ix
 
-def frameSeq2FrameSeqXUtt(raw, vadSegs, maxChar, useVad=False):
-    maxLen = min(len(raw), len(vadSegs))
-    if len(raw) != len(vadSegs):
-        print('Warning: Different number of timesteps in raw (%d) and vadBreaks (%d). Using %d.' % (len(raw), len(vadSegs), maxLen))
+def frameSeq2FrameSeqXUtt(raw, maxChar, vadSegs=None):
+    if vadSegs is None:
+        Xs = [raw[i:i+maxChar] for i in range(0, len(raw), maxChar)]
+        Xs[-1] = np.pad(Xs[-1], [(0, max(0, maxChar-len(Xs[-1])))] + [(0,0) for d in Xs[-1].shape[1:]], 'constant', constant_values=0)
+        out = np.stack(Xs)
+    else:
+        maxLen = min(len(raw), len(vadSegs))
+        if len(raw) != len(vadSegs):
+            print('Warning: Different number of timesteps in raw (%d) and vadBreaks (%d). Using %d.' % (len(raw), len(vadSegs), maxLen))
 
-    oneDimInput = False
-    if len(raw.shape) == 1:
-        oneDimInput = True
-        raw = np.expand_dims(raw, -1)
-    charDim = raw.shape[-1]
-    s = 0
-    Xs = []
-    while s < maxLen:
-        if useVad:
+        oneDimInput = False
+        if len(raw.shape) == 1:
+            oneDimInput = True
+            raw = np.expand_dims(raw, -1)
+        charDim = raw.shape[-1]
+        s = 0
+        Xs = []
+        while s < maxLen:
             e = getNextFrameUtt(vadSegs[:maxLen], maxChar, start_ix=s)
-        else:
-            e = min(s + maxChar, maxLen)
-        Xs_utt = np.zeros((maxChar, charDim))
-        Xs_utt[:e - s, :] = raw[s:e, :]
-        Xs.append(Xs_utt)
-        s = e
-    out = np.stack(Xs)
-    if oneDimInput:
-        out = np.squeeze(Xs, -1)
+            Xs_utt = np.zeros((maxChar, charDim))
+            Xs_utt[:e - s, :] = raw[s:e, :]
+            Xs.append(Xs_utt)
+            s = e
+        out = np.stack(Xs)
+        if oneDimInput:
+            out = np.squeeze(Xs, -1)
     return out
 
-def frameSeqs2FrameSeqsXUtt(raw, vadSegs, maxChar, doc_indices):
+def frameSeqs2FrameSeqsXUtt(raw, maxChar, doc_indices, vadSegs=None):
     Ysegs = dict.fromkeys(raw.keys())
     for doc in Ysegs:
-        Ysegs[doc] = frameSeq2FrameSeqXUtt(np.expand_dims(raw[doc], -1), vadSegs[doc], maxChar)
+        Ysegs[doc] = frameSeq2FrameSeqXUtt(np.expand_dims(raw[doc], -1), maxChar, vadSegs=vadSegs[doc] if vadSegs is not None else None)
     Xs = np.zeros((sum([len(Ysegs[d]) for d in Ysegs]), maxChar, 1))
     for doc in doc_indices:
         s, e = doc_indices[doc]
         Xs[s:e] = Ysegs[doc]
     return Xs
 
-def processAcousticDocuments(raw, vadSegs, maxChar):
+def processAcousticDocuments(raw, maxChar, vadSegs=None):
     utts = []
     doc_indices = dict.fromkeys(raw.keys())
     ix = 0
     for doc in doc_indices:
-        utts_doc = frameSeq2FrameSeqXUtt(raw[doc], vadSegs[doc], maxChar)
+        utts_doc = frameSeq2FrameSeqXUtt(raw[doc], maxChar, vadSegs=vadSegs[doc] if vadSegs is not None else None)
         utts.append(utts_doc)
         doc_indices[doc] = (ix, ix+len(utts_doc))
         ix += len(utts_doc)
