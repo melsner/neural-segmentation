@@ -220,8 +220,8 @@ if __name__ == "__main__":
     N_RESAMPLE = checkpoint.get('nResample', int(args.nResample) if args.nResample else None if ACOUSTIC else None)
     assert ACOUSTIC or not N_RESAMPLE, 'Resampling disallowed in character mode since it does not make any sense'
     crossValDir = args.crossValDir if args.crossValDir else checkpoint.get('crossValDir', None)
-    EVAL_FREQ = int(args.evalFreq) if args.evalFreq else checkpoint.get('evalFreq', 10 if ACOUSTIC else 50)
-    SAVE_FREQ = int(args.saveFreq) if args.saveFreq else checkpoint.get('saveFreq', 10 if ACOUSTIC else 50)
+    EVAL_FREQ = int(args.evalFreq) if args.evalFreq else checkpoint.get('evalFreq', 10 if ACOUSTIC else 10)
+    SAVE_FREQ = int(args.saveFreq) if args.saveFreq else checkpoint.get('saveFreq', 10 if ACOUSTIC else 10)
     wordHidden = checkpoint.get('wordHidden', int(args.wordHidden) if args.wordHidden else 100 if ACOUSTIC else 80)
     uttHidden = checkpoint.get('uttHidden', int(args.uttHidden) if args.uttHidden else 500 if ACOUSTIC else 400)
     segHidden = checkpoint.get('segHidden', int(args.segHidden) if args.segHidden else 500 if ACOUSTIC else 100)
@@ -258,6 +258,10 @@ if __name__ == "__main__":
     if SEG_NET and not AE_NET:
         METRIC = 'logprobbinary'
     VAD_REGIONS_AS_UTTS = True
+    FLAT_DECODER = True
+    WORD_LATENT_VARIABLE = True
+    SEGS_FROM_NETWORK = False
+    assert FIT_FULL or not FLAT_DECODER, 'Flat decoder setting only compatible with --fitType full'
 
     annealer = Annealer(ANNEAL_TEMP, ANNEAL_RATE)
 
@@ -573,6 +577,9 @@ if __name__ == "__main__":
             y_wrd_pad = int(2 ** (math.ceil(math.log(yDim, 2))) - yDim)
             x_utt_pad = int(2 ** (math.ceil(math.log(maxUtt, 2))) - maxUtt)
             y_utt_pad = int(2 ** (math.ceil(math.log(wEncDim, 2))) - wEncDim)
+            if FLAT_DECODER:
+                x_Xs_pad = int(2 ** (math.ceil(math.log(maxChar, 2))) - maxChar)
+                y_Xs_pad = y_wrd_pad
             expand = Lambda(lambda x: K.expand_dims(x, -1), name='ExpandDim')
             squeeze = Lambda(lambda x: K.squeeze(x, -1), name='SqueezeDim')
             x_conv = 64
@@ -586,17 +593,20 @@ if __name__ == "__main__":
         uttInput = Input(shape=(maxUtt, LATENT_DIM if VAE else wordHidden), name='UttInput')
         wordDecInput = Input(shape=(LATENT_DIM if VAE else wordHidden,), name='WordDecoderInput')
         uttDecInput = Input(shape=(uttHidden,), name='UttDecoderInput')
+        segInput = Input(shape=(maxChar+SEG_SHIFT, charDim if ACOUSTIC else 1), name='SegmenterInput')
+        segMaskInput = Input(shape=(maxChar+SEG_SHIFT,1), name='SegmenterMaskInput')
 
         ## OUTPUT MASKS
         m_phon2phon = (lambda x: x * K.cast(K.any(K.reverse(phonInput, 1), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
                       (lambda x: x * K.cast(K.any(phonInput, -1, keepdims=True), 'float32'))
-        m_utt2utt =   (lambda x: x * K.cast(K.any(K.reverse(uttInput, 1), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
+        m_utt2utt   = (lambda x: x * K.cast(K.any(K.reverse(uttInput, 1), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
                       (lambda x: x * K.cast(K.any(uttInput, -1, keepdims=True), 'float32'))
-        m_full2utt =  lambda x: x * K.cast(K.any(K.any(fullInput, -1), -1, keepdims=True), 'float32')
+        m_full2utt  = lambda x: x * K.cast(K.any(K.any(fullInput, -1), -1, keepdims=True), 'float32')
         m_full2uttR = (lambda x: x * K.cast(K.any(K.any(K.reverse(fullInput, (1, 2)), -1), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
                       (lambda x: x * K.cast(K.any(K.any(fullInput, -1), -1, keepdims=True), 'float32'))
         m_full2full = (lambda x: x * K.cast(K.any(K.reverse(fullInput, (1, 2)), -1, keepdims=True), 'float32')) if REVERSE_UTT else \
                       (lambda x: x * K.cast(K.any(fullInput, -1, keepdims=True), 'float32'))
+        m_Xs        = lambda x: x[0] * K.cast(K.any(x[1], -1, keepdims=True), 'float32')
 
         ## WORD ENCODER
         wordEncoder = phonInput
@@ -629,6 +639,8 @@ if __name__ == "__main__":
             wordEncoder = Lambda(sampling, output_shape=(LATENT_DIM,), name='WordEmbSampler')([word_mean, word_log_var])
         elif AE_TYPE == 'cnn':
             wordEncoder = Dense(wordHidden, name='WordEncoderOut')(wordEncoder)
+        if WORD_LATENT_VARIABLE:
+            wordEncoder = LatentVariable(10, name='WordEncoderLV')(wordEncoder)
         wordEncoder = Model(inputs=phonInput, outputs=wordEncoder, name='WordEncoder')
 
         ## WORDS ENCODER
@@ -655,71 +667,103 @@ if __name__ == "__main__":
         uttEncoder = Model(inputs=uttInput, outputs=uttEncoder, name='UttEncoder')
 
         ## UTTERANCE DECODER
-        if AE_TYPE == 'rnn':
-            uttDecoder = RepeatVector(maxUtt, input_shape=(uttHidden,), name='UttEmbeddingRepeater')(uttDecInput)
-            uttDecoder = RNN(uttHidden, return_sequences=True, name='UttDecoderRNN')(uttDecoder)
-            uttDecoder = TimeDistributed(Dense(wEncDim), name='UttDecoderOut')(uttDecoder)
-        elif AE_TYPE == 'cnn':
-            uttDecoder = Dense(int((maxUtt + x_utt_pad) / 2 * (wEncDim + y_utt_pad) / 2 * filters), activation='elu', name='UttDecoderDenseIn')(uttDecInput)
-            uttDecoder = Reshape((int((maxUtt + x_utt_pad) / 2), int((wEncDim + y_utt_pad) / 2), filters), name='UttDecoderReshape')(uttDecoder)
-            uttDecoder = Conv2D(filters, kernel_size, padding='same', activation='elu', name='UttDeconv')(uttDecoder)
-            uttDecoder = UpSampling2D((2, 2), name='UttUpsample')(uttDecoder)
-            uttDecoder = Cropping2D(((0, x_utt_pad), (0, y_utt_pad)), name='UttOutCrop')(uttDecoder)
-            uttDecoder = Conv2D(1, kernel_size, padding='same', activation='linear', name='UttDecoderOut')(uttDecoder)
-            uttDecoder = squeeze(uttDecoder)
-        uttDecoder = Model(inputs=uttDecInput, outputs=uttDecoder, name='UttDecoder')
+        if FLAT_DECODER:
+            if AE_TYPE == 'rnn':
+                uttDecoder = RepeatVector(maxChar, input_shape=(uttHidden,), name='UttEmbeddingRepeater')(uttDecInput)
+                uttDecoder = RNN(uttHidden, return_sequences=True, name='UttDecoderRNN')(uttDecoder)
+                uttDecoder = TimeDistributed(Dense(charDim), name='UttDecoderDistributer')(uttDecoder)
+                uttDecoder = Activation('linear' if ACOUSTIC else 'softmax', name='UttDecoderOut')(uttDecoder)
+            elif AE_TYPE == 'cnn':
+                uttDecoder = Dense(int((maxChar + x_Xs_pad) / 2 * (yDim + y_Xs_pad) / 2 * filters), activation='elu', name='WordDecoderDenseIn')(uttDecInput)
+                uttDecoder = Reshape((int((maxChar + x_Xs_pad) / 2), int((yDim + y_Xs_pad) / 2), filters), name='WordDecoderReshape')(uttDecoder)
+                uttDecoder = Conv2D(filters, kernel_size, padding='same', activation='elu', name='WordDeconv')(uttDecoder)
+                uttDecoder = UpSampling2D((2,2), name='WordUpsample')(uttDecoder)
+                uttDecoder = Cropping2D(((0, x_Xs_pad), (0, y_Xs_pad)), name='WordOutCrop')(uttDecoder)
+                uttDecoder = Conv2D(1, kernel_size, padding='same')(uttDecoder)
+                uttDecoder = squeeze(uttDecoder)
+                if not ACOUSTIC:
+                    uttDecoder = TimeDistributed(Dense(charDim, activation='softmax'))(uttDecoder)
+            uttDecoder = Model(inputs=uttDecInput, outputs=uttDecoder, name='UttDecoder')
 
-        ## WORD DECODER
-        if AE_TYPE == 'rnn':
-            wordDecoder = RepeatVector(wLen, input_shape=(wEncDim,), name='WordEmbeddingRepeater')(wordDecInput)
+        else:
+            if AE_TYPE == 'rnn':
+                uttDecoder = RepeatVector(maxUtt, input_shape=(uttHidden,), name='UttEmbeddingRepeater')(uttDecInput)
+                uttDecoder = RNN(uttHidden, return_sequences=True, name='UttDecoderRNN')(uttDecoder)
+                uttDecoder = TimeDistributed(Dense(wEncDim), name='UttDecoderOut')(uttDecoder)
+                if WORD_LATENT_VARIABLE:
+                    uttDecoder = TimeDistributed(LatentVariable(10), name='UttDecoderOutLV')(uttDecoder)
+            elif AE_TYPE == 'cnn':
+                uttDecoder = Dense(int((maxUtt + x_utt_pad) / 2 * (wEncDim + y_utt_pad) / 2 * filters), activation='elu', name='UttDecoderDenseIn')(uttDecInput)
+                uttDecoder = Reshape((int((maxUtt + x_utt_pad) / 2), int((wEncDim + y_utt_pad) / 2), filters), name='UttDecoderReshape')(uttDecoder)
+                uttDecoder = Conv2D(filters, kernel_size, padding='same', activation='elu', name='UttDeconv')(uttDecoder)
+                uttDecoder = UpSampling2D((2, 2), name='UttUpsample')(uttDecoder)
+                uttDecoder = Cropping2D(((0, x_utt_pad), (0, y_utt_pad)), name='UttOutCrop')(uttDecoder)
+                uttDecoder = Conv2D(1, kernel_size, padding='same', activation='linear', name='UttDecoderOut')(uttDecoder)
+                uttDecoder = squeeze(uttDecoder)
+            uttDecoder = Model(inputs=uttDecInput, outputs=uttDecoder, name='UttDecoder')
+
+            ## WORD DECODER
+            if AE_TYPE == 'rnn':
+                wordDecoder = RepeatVector(wLen, input_shape=(wEncDim,), name='WordEmbeddingRepeater')(wordDecInput)
+                if MASKING:
+                    wordDecoder = Masking(mask_value=0, name='WordDecoderInputMask')(wordDecoder)
+                if WORD_LATENT_VARIABLE:
+                    wordDecoder = RNN(2**wordHidden, return_sequences=True, name='WordDecoderRNN')(wordDecoder)
+                else:
+                    wordDecoder = RNN(wordHidden, return_sequences=True, name='WordDecoderRNN')(wordDecoder)
+                wordDecoder = TimeDistributed(Dense(charDim), name='WordDecoderDistributer')(wordDecoder)
+                wordDecoder = Activation('linear' if ACOUSTIC else 'softmax', name='WordDecoderOut')(wordDecoder)
+            elif AE_TYPE == 'cnn':
+                wordDecoder = Dense(int((wLen + x_wrd_pad) / 2 * (yDim + y_wrd_pad) / 2 * filters), activation='elu', name='WordDecoderDenseIn')(wordDecInput)
+                wordDecoder = Reshape((int((wLen + x_wrd_pad) / 2), int((yDim + y_wrd_pad) / 2), filters), name='WordDecoderReshape')(wordDecoder)
+                wordDecoder = Conv2D(filters, kernel_size, padding='same', activation='elu', name='WordDeconv')(wordDecoder)
+                wordDecoder = UpSampling2D((2,2), name='WordUpsample')(wordDecoder)
+                wordDecoder = Cropping2D(((0, x_wrd_pad), (0, y_wrd_pad)), name='WordOutCrop')(wordDecoder)
+                wordDecoder = Conv2D(1, kernel_size, padding='same')(wordDecoder)
+                wordDecoder = squeeze(wordDecoder)
+                if not ACOUSTIC:
+                    wordDecoder = TimeDistributed(Dense(charDim, activation='softmax'))(wordDecoder)
+            wordDecoder = Model(inputs=wordDecInput, outputs=wordDecoder, name='WordDecoder')
+
+            ## WORDS DECODER (OUTPUT LAYER)
+            wordsDecoder = TimeDistributed(wordDecoder, name='WordsDecoderDistributer')(uttInput)
             if MASKING:
-                wordDecoder = Masking(mask_value=0, name='WordDecoderInputMask')(wordDecoder)
-            wordDecoder = RNN(wordHidden, return_sequences=True, name='WordDecoderRNN')(wordDecoder)
-            wordDecoder = TimeDistributed(Dense(charDim), name='WordDecoderDistributer')(wordDecoder)
-            wordDecoder = Activation('linear' if ACOUSTIC else 'softmax', name='WordDecoderOut')(wordDecoder)
-        elif AE_TYPE == 'cnn':
-            wordDecoder = Dense(int((wLen + x_wrd_pad) / 2 * (yDim + y_wrd_pad) / 2 * filters), activation='elu', name='WordDecoderDenseIn')(wordDecInput)
-            wordDecoder = Reshape((int((wLen + x_wrd_pad) / 2), int((yDim + y_wrd_pad) / 2), filters), name='WordDecoderReshape')(wordDecoder)
-            wordDecoder = Conv2D(filters, kernel_size, padding='same', activation='elu', name='WordDeconv')(wordDecoder)
-            wordDecoder = UpSampling2D((2,2), name='WordUpsample')(wordDecoder)
-            wordDecoder = Cropping2D(((0, x_wrd_pad), (0, y_wrd_pad)), name='WordOutCrop')(wordDecoder)
-            wordDecoder = Conv2D(1, kernel_size, padding='same')(wordDecoder)
-            wordDecoder = squeeze(wordDecoder)
-            if not ACOUSTIC:
-                wordDecoder = TimeDistributed(Dense(charDim, activation='softmax'))(wordDecoder)
-        wordDecoder = Model(inputs=wordDecInput, outputs=wordDecoder, name='WordDecoder')
-
-        ## WORDS DECODER (OUTPUT LAYER)
-        wordsDecoder = TimeDistributed(wordDecoder, name='WordsDecoderDistributer')(uttInput)
-        if MASKING:
-            wordsDecoder = Masking(mask_value=0.0, name='WordsDecoderInputMask')(wordsDecoder)
-        wordsDecoder = Model(inputs=uttInput, outputs=wordsDecoder, name='WordsDecoder')
+                wordsDecoder = Masking(mask_value=0.0, name='WordsDecoderInputMask')(wordsDecoder)
+            wordsDecoder = Model(inputs=uttInput, outputs=wordsDecoder, name='WordsDecoder')
 
         ## ENCODER-DECODER LAYERS
         wordEncoderTensor = wordEncoder(phonInput)
-        wordDecoderTensor = wordDecoder(wordDecInput)
-        if MASKING:
-            wordDecoderTensor = Masking(mask_value=0.0)(Lambda(m_phon2phon)(wordDecoderTensor))
+        if not FLAT_DECODER:
+            wordDecoderTensor = wordDecoder(wordDecInput)
+            if MASKING:
+                wordDecoderTensor = Masking(mask_value=0.0)(Lambda(m_phon2phon)(wordDecoderTensor))
 
         wordsEncoderTensor = wordsEncoder(fullInput)
-        wordsDecoderTensor = wordsDecoder(uttInput)
-        if MASKING:
-            wordsDecoderTensor = Masking(mask_value=0.0)(Lambda(m_full2full)(wordsDecoderTensor))
+        if FLAT_DECODER:
+            uttEncoderDecoder = uttDecoder(uttEncoder(uttInput))
+            uttEncoderDecoder = Model(inputs=uttInput, outputs=uttEncoderDecoder, name='UttEncoderDecoder')
+            fullEncoderDecoder = uttEncoderDecoder(wordsEncoderTensor)
+            if MASKING:
+                fullEncoderDecoder = Lambda(m_Xs, name='FullPremask')([fullEncoderDecoder, segInput])
+        else:
+            wordsDecoderTensor = wordsDecoder(uttInput)
+            if MASKING:
+                wordsDecoderTensor = Masking(mask_value=0.0)(Lambda(m_full2full)(wordsDecoderTensor))
 
-        phonEncoderDecoder = wordDecoder(wordEncoderTensor)
-        if MASKING:
-            phonEncoderDecoder = Lambda(m_phon2phon, name='PhonPremask')(phonEncoderDecoder)
+            phonEncoderDecoder = wordDecoder(wordEncoderTensor)
+            if MASKING:
+                phonEncoderDecoder = Lambda(m_phon2phon, name='PhonPremask')(phonEncoderDecoder)
 
-        uttEncoderDecoder = uttDecoder(uttEncoder(uttInput))
-        uttEncoderDecoder = Model(inputs=uttInput, outputs=uttEncoderDecoder, name='UttEncoderDecoder')
+            uttEncoderDecoder = uttDecoder(uttEncoder(uttInput))
+            uttEncoderDecoder = Model(inputs=uttInput, outputs=uttEncoderDecoder, name='UttEncoderDecoder')
 
-        fullEncoderUttDecoder = uttEncoderDecoder(wordsEncoderTensor)
-        if MASKING:
-            fullEncoderUttDecoder = Lambda(m_full2uttR, name='UttPremask')(fullEncoderUttDecoder)
+            fullEncoderUttDecoder = uttEncoderDecoder(wordsEncoderTensor)
+            if MASKING:
+                fullEncoderUttDecoder = Lambda(m_full2uttR, name='UttPremask')(fullEncoderUttDecoder)
 
-        fullEncoderDecoder = wordsDecoder(fullEncoderUttDecoder)
-        if MASKING:
-            fullEncoderDecoder = Lambda(m_full2full, name='FullPremask')(fullEncoderDecoder)
+            fullEncoderDecoder = wordsDecoder(fullEncoderUttDecoder)
+            if MASKING:
+                fullEncoderDecoder = Lambda(m_full2full, name='FullPremask')(fullEncoderDecoder)
 
         ## VAE LOSS
         if VAE:
@@ -732,25 +776,29 @@ if __name__ == "__main__":
                 return ae_loss + kl_loss
 
         ## COMPILED (TRAINABLE) MODELS
-        ae_phon = phonEncoderDecoder
-        if MASKING:
-            ae_phon = Masking(mask_value=0, name='PhonMask')(ae_phon)
-        ae_phon = Model(inputs=phonInput, outputs=ae_phon, name='AEPhon')
-        ae_phon.compile(
-            loss=vae_loss if VAE else "mean_squared_error" if ACOUSTIC else sparse_xent,
-            metrics=None if ACOUSTIC else [sparse_acc],
-            optimizer=optim_map[OPTIM]())
+        if not FLAT_DECODER:
+            ae_phon = phonEncoderDecoder
+            if MASKING:
+                ae_phon = Masking(mask_value=0, name='PhonMask')(ae_phon)
+            ae_phon = Model(inputs=phonInput, outputs=ae_phon, name='AEPhon')
+            ae_phon.compile(
+                loss=vae_loss if VAE else "mean_squared_error" if ACOUSTIC else sparse_xent,
+                metrics=None if ACOUSTIC else [sparse_acc],
+                optimizer=optim_map[OPTIM]())
 
-        ae_utt = uttEncoderDecoder(uttInput)
-        if MASKING:
-            ae_utt = Masking(mask_value=0, name='UttMask')(Lambda(m_utt2utt, name='UttPremask')(ae_utt))
-        ae_utt = Model(inputs=uttInput, outputs=ae_utt, name='AEUtt')
-        ae_utt.compile(loss="mean_squared_error", optimizer=optim_map[OPTIM]())
+            ae_utt = uttEncoderDecoder(uttInput)
+            if MASKING:
+                ae_utt = Masking(mask_value=0, name='UttMask')(Lambda(m_utt2utt, name='UttPremask')(ae_utt))
+            ae_utt = Model(inputs=uttInput, outputs=ae_utt, name='AEUtt')
+            ae_utt.compile(loss="mean_squared_error", optimizer=optim_map[OPTIM]())
 
         ae_full = fullEncoderDecoder
         if MASKING:
             ae_full = Masking(mask_value=0, name='AEFullMask')(ae_full)
-        ae_full = Model(inputs=fullInput, outputs=ae_full, name='AEFull')
+        if FLAT_DECODER:
+            ae_full = Model(inputs=[fullInput, segInput], outputs=ae_full, name='AEFull')
+        else:
+            ae_full = Model(inputs=fullInput, outputs=ae_full, name='AEFull')
         ae_full.compile(loss="mean_squared_error" if ACOUSTIC else sparse_xent,
                         metrics=None if ACOUSTIC else [sparse_acc],
                         optimizer=optim_map[OPTIM]())
@@ -763,21 +811,28 @@ if __name__ == "__main__":
         embed_words = K.function(inputs=[fullInput, K.learning_phase()], outputs=[wordsEncoderTensor], name='EmbedWords')
         embed_words = makeFunction(embed_words)
 
-        embed_words_reconst = K.function(inputs=[fullInput, K.learning_phase()], outputs=[fullEncoderUttDecoder], name='EmbedWordsReconstructed')
-        embed_words_reconst = makeFunction(embed_words_reconst)
+        if not FLAT_DECODER:
+            embed_words_reconst = K.function(inputs=[fullInput, K.learning_phase()], outputs=[fullEncoderUttDecoder], name='EmbedWordsReconstructed')
+            embed_words_reconst = makeFunction(embed_words_reconst)
 
-        word_decoder = Model(inputs=[wordDecInput,phonInput], outputs=wordDecoderTensor, name='WordDecoder')
-        word_decoder.compile(loss="mean_squared_error" if ACOUSTIC else sparse_xent,
-                             metrics=None if ACOUSTIC else [sparse_acc],
-                             optimizer=optim_map[OPTIM]())
+            word_decoder = Model(inputs=[wordDecInput,phonInput], outputs=wordDecoderTensor, name='WordDecoder')
+            word_decoder.compile(loss="mean_squared_error" if ACOUSTIC else sparse_xent,
+                                 metrics=None if ACOUSTIC else [sparse_acc],
+                                 optimizer=optim_map[OPTIM]())
 
-        words_decoder = Model(inputs=[uttInput,fullInput], outputs=wordsDecoderTensor, name='WordsDecoder')
-        words_decoder.compile(loss="mean_squared_error" if ACOUSTIC else sparse_xent,
-                              metrics=None if ACOUSTIC else [sparse_acc],
-                              optimizer=optim_map[OPTIM]())
+            words_decoder = Model(inputs=[uttInput,fullInput], outputs=wordsDecoderTensor, name='WordsDecoder')
+            words_decoder.compile(loss="mean_squared_error" if ACOUSTIC else sparse_xent,
+                                  metrics=None if ACOUSTIC else [sparse_acc],
+                                  optimizer=optim_map[OPTIM]())
 
-        targets = K.placeholder(shape=ae_full.input_shape)
-        loss_tensor = K.function(inputs=[fullInput, targets, K.learning_phase()], outputs=[Lambda(lambda x: loss_array(*(x+[ae_full.loss_functions[0]])))([targets, fullEncoderDecoder])])
+        if ACOUSTIC:
+            targets = K.placeholder(shape=ae_full.output_shape)
+        else:
+            targets = K.placeholder(shape=ae_full.output_shape[:-1] + (1,))
+        if FLAT_DECODER:
+            loss_tensor = K.function(inputs=[fullInput, segInput, targets, K.learning_phase()], outputs=[Lambda(lambda x: loss_array(*(x+[ae_full.loss_functions[0]])))([targets, fullEncoderDecoder])])
+        else:
+            loss_tensor = K.function(inputs=[fullInput, targets, K.learning_phase()], outputs=[Lambda(lambda x: loss_array(*(x+[ae_full.loss_functions[0]])))([targets, fullEncoderDecoder])])
         loss_tensor = makeFunction(loss_tensor)
 
         ## (SUB-)NETWORK SUMMARIES
@@ -792,47 +847,51 @@ if __name__ == "__main__":
         print('Word sequence encoder model:')
         wordsEncoder.summary()
         print('\n')
-        print('Word sequence decoder model:')
-        wordsDecoder.summary()
-        print('\n')
-        print('Word decoder model:')
-        wordDecoder.summary()
-        print('\n')
-        print('Utterance encoder model:')
-        uttEncoder.summary()
-        print('\n')
-        print('Utterance decoder model:')
-        uttDecoder.summary()
-        print('\n')
-        print('Phonological auto-encoder model:')
-        ae_phon.summary()
-        print('\n')
-        print('Utterance auto-encoder model:')
-        ae_utt.summary()
-        print('\n')
+        if not FLAT_DECODER:
+            print('Word sequence decoder model:')
+            wordsDecoder.summary()
+            print('\n')
+            print('Word decoder model:')
+            wordDecoder.summary()
+            print('\n')
+            print('Utterance encoder model:')
+            uttEncoder.summary()
+            print('\n')
+            print('Utterance decoder model:')
+            uttDecoder.summary()
+            print('\n')
+            print('Phonological auto-encoder model:')
+            ae_phon.summary()
+            print('\n')
+            print('Utterance auto-encoder model:')
+            ae_utt.summary()
+            print('\n')
         print('Full auto-encoder model:')
         ae_full.summary()
         print('\n')
 
         ## Initialize AE wrapper object containing all sub nets for convenience
         ae = AE(ae_full,
-                ae_utt=ae_utt,
-                ae_phon=ae_phon,
+                ae_utt=None if FLAT_DECODER else ae_utt,
+                ae_phon=None if FLAT_DECODER else ae_phon,
                 embed_word=embed_word,
                 embed_words=embed_words,
-                embed_words_reconst=embed_words_reconst,
-                word_decoder=word_decoder,
-                words_decoder=words_decoder,
+                embed_words_reconst=None if FLAT_DECODER else embed_words_reconst,
+                word_decoder=None if FLAT_DECODER else word_decoder,
+                words_decoder=None if FLAT_DECODER else words_decoder,
                 loss_tensor=loss_tensor,
+                maxChar = maxChar,
+                maxUtt = maxUtt,
+                maxLen = maxLen,
+                charDim = charDim if ACOUSTIC else 1,
                 latentDim=LATENT_DIM if VAE else None,
                 charDropout=charDropout,
                 wordDropout=wordDropout,
-                fitType=FIT_TYPE)
+                fitType=FIT_TYPE,
+                flatDecoder=FLAT_DECODER)
 
     if SEG_NET:
         ## SEGMENTER NETWORK
-        segInput = Input(shape=(maxChar+SEG_SHIFT, charDim if ACOUSTIC else 1), name='SegmenterInput')
-        segMaskInput = Input(shape=(maxChar+SEG_SHIFT,1), name='SegmenterMaskInput')
 
         segmenter = Sequential(name="Segmenter")
         if ACOUSTIC:
@@ -864,7 +923,7 @@ if __name__ == "__main__":
         ## Save current model weights for reinitalization if needed
         RESUME_AE = ae.load(logdir)
         if not RESUME_AE:
-            # sess.run(tf.global_variables_initializer())
+            sess.run(tf.global_variables_initializer())
             ae.save(logdir, suffix='_init')
             ae.save(logdir)
     if SEG_NET:
@@ -1056,12 +1115,6 @@ if __name__ == "__main__":
                         print('Reconstruction:      %s' % reconstructionXae[i])
                         print()
 
-            Yae = getYae(Xae, REVERSE_UTT)
-
-            if DEBUG and False:
-                preds = ae.predict(Xae, batch_size=BATCH_SIZE)
-                print('Finite prediction cells: %s' %np.isfinite(preds).sum())
-
             print("Total deleted chars:    %d" %(deletedChars.sum()))
             print("Total one-letter words: %d" %(oneLetter.sum()))
 
@@ -1083,7 +1136,7 @@ if __name__ == "__main__":
                                            nResample=None)
 
             ae.plotFull(Xae_full if N_RESAMPLE else Xae[utt_ids],
-                        getYae(Xae[utt_ids], REVERSE_UTT),
+                        getYae(Xs[utt_ids] if FLAT_DECODER else Xae[utt_ids], REVERSE_UTT),
                         logdir,
                         'pretrain',
                         iteration+1,
@@ -1093,7 +1146,7 @@ if __name__ == "__main__":
 
             # Correctness checks for NN masking
             if DEBUG:
-                out = ae.predict(Xae, batch_size=BATCH_SIZE)
+                out = ae.predict(Xae, target=getYae(Xs[utt_ids] if FLAT_DECODER else Xae[utt_ids], REVERSE_UTT), batch_size=BATCH_SIZE)
                 print('Timesteps in input: %s' % Xae.any(-1).sum())
                 print('Timesteps in output: %s (should equal timesteps in input)' % out.any(-1).sum())
                 print('Deleted timesteps: %s' % int(deletedChars.sum()))
@@ -1232,7 +1285,7 @@ if __name__ == "__main__":
                 pSegs_batch[np.where(Xs_mask_batch)] = 0.
 
             st0 = time.time()
-            scores_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxUtt))
+            scores_batch = np.zeros((len(Xs_batch), N_SAMPLES, 1 if FLAT_DECODER else maxUtt))
             penalties_batch = np.zeros_like(scores_batch)
             segSamples_batch = np.zeros((len(Xs_batch), N_SAMPLES, maxChar))
             print()
@@ -1260,15 +1313,24 @@ if __name__ == "__main__":
                                                                                reverseUtt=REVERSE_UTT,
                                                                                batch_size=BATCH_SIZE,
                                                                                nResample=N_RESAMPLE,
-                                                                               agg='sum' if ALGORITHM=='viterbi' else 'mean')
+                                                                               agg='sum' if ALGORITHM=='viterbi' else 'mean',
+                                                                               flatDecoder=FLAT_DECODER)
 
-                    Yae_batch = getYae(Xae_batch, REVERSE_UTT)
+                    Yae_batch = getYae(Xs_batch if FLAT_DECODER else Xae_batch, REVERSE_UTT)
+                    if FLAT_DECODER:
+                        deletedChars_batch = deletedChars_batch.sum(-1, keepdims=True)
+                        oneLetter_batch = oneLetter_batch.sum(-1, keepdims=True)
 
                     penalties_batch[:,s,:] -= deletedChars_batch * DEL_WT
                     penalties_batch[:,s,:] -= oneLetter_batch * ONE_LETTER_WT
                     if SEG_WT > 0:
                         for u in range(len(segs_batch)):
-                            penalties_batch[u, s, -segs_batch[u].sum():] -= SEG_WT
+                            nWrds = segs_batch[u].sum()
+                            nWrds += (segs_batch[u, 0] == 0)  # add a word if no boundary at first timestep
+                            if FLAT_DECODER:
+                                penalties_batch[u,s,1] -= SEG_WT*nWrds
+                            else:
+                                penalties_batch[u,s,-nWrds:] -= SEG_WT
 
                 pb.update(s+1)
 
@@ -1303,11 +1365,12 @@ if __name__ == "__main__":
                                            Xs_mask_batch,
                                            segProbs_batch,
                                            batch_size=BATCH_SIZE)
-                print('Getting segmentation proposal from network')
-                preds = segmenter.predict(Xs_batch,
-                                          Xs_mask_batch,
-                                          batch_size=BATCH_SIZE)
-                segsProposal_batch = pSegs2Segs(preds, ACOUSTIC)
+                if SEGS_FROM_NETWORK:
+                    print('Getting segmentation proposal from network')
+                    preds = segmenter.predict(Xs_batch,
+                                              Xs_mask_batch,
+                                              batch_size=BATCH_SIZE)
+                    segsProposal_batch = pSegs2Segs(preds, ACOUSTIC)
                 if ACOUSTIC:
                     segsProposal_batch[np.where(vadSegsXUtt_batch)] = 1.
                 else:
@@ -1331,7 +1394,7 @@ if __name__ == "__main__":
                                                                                    fitParts=FIT_PARTS,
                                                                                    fitFull=FIT_FULL)
 
-                Yae_batch = getYae(Xae_batch, REVERSE_UTT)
+                Yae_batch = getYae(Xs_batch if FLAT_DECODER else Xae_batch, REVERSE_UTT)
 
             n_Char_batch = (1 - Xs_mask_batch).sum()
             print('Non-padding input timesteps in batch: %d' % n_Char_batch)
@@ -1531,7 +1594,7 @@ if __name__ == "__main__":
                                            nResample=None)
 
             ae.plotFull(Xae_full if N_RESAMPLE else Xae[utt_ids],
-                        getYae(Xae[utt_ids], REVERSE_UTT),
+                        getYae(Xs[utt_ids] if FLAT_DECODER else Xae[utt_ids], REVERSE_UTT),
                         logdir,
                         'train',
                         iteration,
@@ -1542,7 +1605,10 @@ if __name__ == "__main__":
             if not ACOUSTIC:
                 print('')
                 print('Example reconstruction of learned segmentation')
-                printReconstruction(utt_ids, ae, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
+                if FLAT_DECODER:
+                    printReconstruction(utt_ids, ae, Xs, ctable, BATCH_SIZE, REVERSE_UTT)
+                else:
+                    printReconstruction(utt_ids, ae, Xae, ctable, BATCH_SIZE, REVERSE_UTT)
 
         if SEG_NET:
             segmenter.plot(Xs[utt_ids],
