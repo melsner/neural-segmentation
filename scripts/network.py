@@ -199,7 +199,81 @@ def load_optimizer_weights(model, path):
                               'optimizer.')
 
 
+##################################################################################
+##################################################################################
+##
+##  Custom Layers
+##
+##################################################################################
+##################################################################################
 
+class LatentVariable(Layer):
+
+    def __init__(self,
+                 confidence='train',
+                 activation='sigmoid',
+                 confidence_initializer='ones',
+                 confidence_regularizer=None,
+                 confidence_constraint=None,
+                 **kwargs):
+        self.confidence = confidence
+        self.activation = activations.get(activation)
+        self.confidence_initializer = initializers.get(confidence_initializer)
+        self.confidence_regularizer = regularizers.get(confidence_regularizer)
+        self.confidence_constraint = constraints.get(confidence_constraint)
+
+        super(LatentVariable, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        if self.confidence == 'train':
+            self.confidence = self.add_weight(name='confidence',
+                                              shape=(),
+                                              initializer=self.confidence_initializer,
+                                              regularizer=self.confidence_regularizer,
+                                              constraint=self.confidence_constraint)
+        super(LatentVariable, self).build(input_shape)
+
+    def call(self, inputs):
+        output = inputs * self.confidence
+        if self.activation is not None:
+            output = self.activation(output)
+        return output
+
+    def compute_output_shape(self, input_shape):
+        out = input_shape
+        return out
+
+    def get_config(self):
+        config = {
+            'confidence': self.confidence,
+            'activation': self.activation,
+            'confidence_initializer': self.confidence_initializer,
+            'confidence_regularizer': self.confidence_regularizer,
+            'confidence_constraint': self.confidence_constraint
+        }
+        base_config = super(LatentVariable, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+class BinarySoftmax(Layer):
+    def __init__(self, **kwargs):
+        super(BinarySoftmax, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        bits = input_shape[-1]
+        binary = (np.expand_dims(np.arange(2 ** bits), -1) & (1 << np.arange(bits))).astype(bool).astype(int).T
+        self.binary = K.constant(binary)
+        super(BinarySoftmax, self).build(input_shape)
+
+    def call(self, inputs):
+        output = inputs
+        output = (output[..., None] * self.binary[None, ...]) + (
+        (1 - output[..., None]) * (1 - self.binary[None, ...]))
+        output = K.prod(output, axis=1)
+        return output
+
+    def compute_output_shape(self, input_shape):
+        out = (input_shape[0],) + (K.int_shape(self.binary)[0],)
+        return out
 
 ##################################################################################
 ##################################################################################
@@ -211,8 +285,8 @@ def load_optimizer_weights(model, path):
 
 class AE(object):
     def __init__(self, ae_full, ae_utt=None, ae_phon=None, embed_word=None, embed_words=None, embed_words_reconst=None,
-                 word_decoder=None, words_decoder=None, loss_tensor=None, latentDim=None, charDropout=None,
-                 wordDropout=None, fitType=None):
+                 word_decoder=None, words_decoder=None, loss_tensor=None, maxChar=None, maxUtt=None, maxLen=None, charDim=None,
+                 latentDim=None, charDropout=None, wordDropout=None, fitType=None, flatDecoder=False):
         self.full = ae_full
         self.utt = ae_utt
         self.phon = ae_phon
@@ -223,11 +297,16 @@ class AE(object):
         self.words_decoder = words_decoder
         self.loss_tensor = loss_tensor
         self.latentDim = latentDim
+        self.maxChar = maxChar
+        self.maxUtt = maxUtt
+        self.maxLen = maxLen
+        self.charDim = charDim
         self.charDropout = charDropout
         self.wordDropout = wordDropout
         self.fitType = fitType
         self.fitFull = fitType in ['full', 'both']
         self.fitParts = fitType in ['parts', 'both']
+        self.flatDecoder = flatDecoder
 
     def decode_word(self, input, batch_size=128, verbose=0):
         return self.word_decoder.predict(input, batch_size=batch_size, verbose=verbose)
@@ -236,7 +315,11 @@ class AE(object):
         return self.words_decoder.predict(input, batch_size=batch_size, verbose=verbose)
 
     ## Faster but more memory intensive
-    def predictA(self, input, batch_size=128, verbose=0):
+    def predictA(self, input, target=None, batch_size=128, verbose=0):
+        if target is None:
+            target = np.ones((len(input), self.maxChar, self.charDim))
+        if self.flatDecoder:
+            return self.full.predict([input, target], batch_size=batch_size, verbose=verbose)
         return self.full.predict(input, batch_size=batch_size, verbose=verbose)
 
     ## Slower but more memory efficient
@@ -246,17 +329,20 @@ class AE(object):
         output = self.decode_words([output, input], batch_size=batch_size, verbose=verbose)
         return output
 
-    def predict(self, input, batch_size=128, verbose=0):
-        if self.fitType == 'full':
+    def predict(self, input, target=None, batch_size=128, verbose=0):
+        if self.fitType == 'full' or self.flatDecoder:
             ## fitType 'full' requires version A because the utterance model doesn't auto-encode
-            return self.predictA(input, batch_size, verbose=verbose)
+            return self.predictA(input, target=target, batch_size=batch_size, verbose=verbose)
         return self.predictB(input, batch_size, verbose=verbose)
 
     ## Faster but more memory intensive
     def evaluateA(self, input, target, batch_size=128, verbose=0):
         if verbose != 0:
             print('Encoding/decoding full input')
-        eval = self.full.evaluate(input, target, batch_size=batch_size, verbose=verbose)
+        if self.flatDecoder:
+            eval = self.full.evaluate([input, target], target, batch_size=batch_size, verbose=verbose)
+        else:
+            eval = self.full.evaluate(input, target, batch_size=batch_size, verbose=verbose)
         if type(eval) is not list:
             eval = [eval]
         return eval
@@ -277,7 +363,7 @@ class AE(object):
         return output
 
     def evaluate(self, input, target, batch_size=128, verbose=0):
-        if self.fitType == 'full':
+        if self.fitType == 'full' or self.flatDecoder:
             ## fitType 'full' requires version A because the utterance model doesn't auto-encode
             return self.evaluateA(input, target, batch_size, verbose=verbose)
         return self.evaluateB(input, target, batch_size, verbose=verbose)
@@ -292,7 +378,7 @@ class AE(object):
                                                                 maxUtt,
                                                                 maxLen,
                                                                 nResample)
-        Yae_full = getYae(Xae_full, reverseUtt)
+        Yae_full = getYae(Xs if self.flatDecoder else Xae_full, reverseUtt)
 
         if fitParts:
             ## Train phonological AE
@@ -357,7 +443,7 @@ class AE(object):
         if fitFull:
             if verbose:
                 print('Fitting full auto-encoder network')
-            self.full.fit(Xae_full,
+            self.full.fit([Xae_full, Yae_full] if self.flatDecoder else Xae_full,
                           Yae_full,
                           batch_size,
                           shuffle=True,
@@ -428,7 +514,7 @@ class AE(object):
             ax_targ = fig.add_subplot(413)
             ax_pred = fig.add_subplot(414)
             inputs_resamp_raw = Xae_resamp
-            preds_raw = self.predict(inputs_resamp_raw, batch_size=batch_size)
+            preds_raw = self.predict(inputs_resamp_raw, target=Yae, batch_size=batch_size)
             if inputs_resamp_raw.shape[-1] == 1:
                 inputs_resamp_raw = oneHot(inputs_resamp_raw, preds_raw.shape[-1])
         else:
@@ -436,7 +522,7 @@ class AE(object):
             ax_targ = fig.add_subplot(312)
             ax_pred = fig.add_subplot(313)
             inputs_src_raw = Xae
-            preds_raw = self.predict(inputs_src_raw, batch_size=batch_size)
+            preds_raw = self.predict(inputs_src_raw, target=Yae, batch_size=batch_size)
         targs_raw = Yae
         if inputs_src_raw.shape[-1] == 1:
             inputs_src_raw = oneHot(inputs_src_raw, preds_raw.shape[-1])
@@ -450,10 +536,15 @@ class AE(object):
 
             ## Plot source inputs
             inputs_src = []
-            for w in range(len(inputs_src_raw[u])):
-                inputs_src_w = inputs_src_raw[u, w, ...]
-                inputs_src_w = inputs_src_w[np.where(inputs_src_w.any(-1))]
-                inputs_src.append(inputs_src_w)
+            if self.flatDecoder:
+                inputs_src_u = inputs_src_raw[u, ...]
+                inputs_src_u = inputs_src_u[np.where(inputs_src_u.any(-1))]
+                inputs_src.append(inputs_src_u)
+            else:
+                for w in range(len(inputs_src_raw[u])):
+                    inputs_src_w = inputs_src_raw[u, w, ...]
+                    inputs_src_w = inputs_src_w[np.where(inputs_src_w.any(-1))]
+                    inputs_src.append(inputs_src_w)
             inputs_src = np.concatenate(inputs_src)
             inputs_src = np.swapaxes(inputs_src, 0, 1)
             ax_input.clear()
@@ -464,10 +555,15 @@ class AE(object):
             ## Plot resampled inputs if applicable
             if not Xae_resamp is None:
                 inputs_resamp = []
-                for w in range(len(inputs_src_raw[u])):
-                    inputs_resamp_w = inputs_resamp_raw[u, w, ...]
-                    inputs_resamp_w = inputs_resamp_w[np.where(inputs_resamp_w.any(-1))]
-                    inputs_resamp.append(inputs_resamp_w)
+                if self.flatDecoder:
+                    inputs_resamp_u = inputs_resamp_raw[u, ...]
+                    inputs_resamp_u = inputs_resamp_u[np.where(inputs_resamp_u.any(-1))]
+                    inputs_resamp.append(inputs_resamp_u)
+                else:
+                    for w in range(len(inputs_src_raw[u])):
+                        inputs_resamp_w = inputs_resamp_raw[u, w, ...]
+                        inputs_resamp_w = inputs_resamp_w[np.where(inputs_resamp_w.any(-1))]
+                        inputs_resamp.append(inputs_resamp_w)
                 inputs_resamp = np.concatenate(inputs_resamp)
                 inputs_resamp = np.swapaxes(inputs_resamp, 0, 1)
                 ax_input_resamp.clear()
@@ -477,10 +573,15 @@ class AE(object):
 
             ## Plot reconstruction targets
             targs = []
-            for w in range(len(targs_raw[u])):
-                targs_w = targs_raw[u, w, ...]
-                targs_w = targs_w[np.where(targs_w.any(-1))]
-                targs.append(targs_w)
+            if self.flatDecoder:
+                targs_u = targs_raw[u, ...]
+                targs_u = targs_u[np.where(targs_u.any(-1))]
+                targs.append(targs_u)
+            else:
+                for w in range(len(targs_raw[u])):
+                    targs_w = targs_raw[u, w, ...]
+                    targs_w = targs_w[np.where(targs_w.any(-1))]
+                    targs.append(targs_w)
             targs = np.concatenate(targs)
             targs = np.swapaxes(targs, 0, 1)
             ax_targ.clear()
@@ -490,10 +591,15 @@ class AE(object):
 
             ## Plot predictions
             preds = []
-            for w in range(len(preds_raw[u])):
-                preds_w = preds_raw[u, w, ...]
-                preds_w = preds_w[np.where(preds_w.any(-1))]
-                preds.append(preds_w)
+            if self.flatDecoder:
+                preds_u = preds_raw[u, ...]
+                preds_u = preds_u[np.where(preds_u.any(-1))]
+                preds.append(preds_u)
+            else:
+                for w in range(len(preds_raw[u])):
+                    preds_w = preds_raw[u, w, ...]
+                    preds_w = preds_w[np.where(preds_w.any(-1))]
+                    preds.append(preds_w)
             preds = np.concatenate(preds)
             preds = np.swapaxes(preds, 0, 1)
             ax_pred.clear()
@@ -1061,6 +1167,8 @@ class Segmenter(object):
 def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams, maxLen, maxUtt, raw_total, logdir,
                  iteration, batch_num, reverseUtt=False, batch_size=128, nResample=None, acoustic=False, ae=None,
                  segmenter=None, debug=False):
+    flatDecoder = ae.flatDecoder
+
     if acoustic:
         vadIntervals, GOLDWRD, GOLDPHN, vad = otherParams
     else:
@@ -1091,7 +1199,7 @@ def evalCrossVal(Xs, Xs_mask, gold, doc_list, doc_indices, utt_ids, otherParams,
                                                  maxUtt,
                                                  maxLen,
                                                  nResample)
-        Yae = getYae(Xae, reverseUtt)
+        Yae = getYae(Xs if flatDecoder else Xae, reverseUtt)
         print('Computing network losses')
         eval = ae.evaluate(Xae, Yae, batch_size=batch_size)
         cvAELoss = eval[0]

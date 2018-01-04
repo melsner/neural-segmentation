@@ -24,6 +24,8 @@ def testFullAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_in
     assert acoustic or ctable is not None, 'ctable object must be provided to testFullAEOnFixedSeg() in character mode'
     assert not acoustic or vadSegs is not None, 'vadBreaks object must be provided to testFullAEOnFixedSeg() in acoustic mode'
 
+    flatDecoder = ae.flatDecoder
+
     if gold is not None:
         if acoustic:
             _, goldseg = readSegFile(gold)
@@ -71,7 +73,7 @@ def testFullAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_in
             prefix += segLevel
 
         ae.plotFull(Xae_full if nResample else Xae[utt_ids],
-                    getYae(Xae[utt_ids], reverseUtt),
+                    getYae(Xs[utt_ids] if flatDecoder else Xae[utt_ids], reverseUtt),
                     logdir,
                     prefix,
                     i + 1,
@@ -117,6 +119,9 @@ def testFullAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxUtt, maxLen, doc_in
 def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, utt_ids, logdir, reverseUtt=False,
                          batch_size=128, nResample=None, trainIters=100, vadSegs=None, ctable=None, gold=None,
                          segLevel=None, acoustic=False, vadRegionsAsUtts=False, debug=False):
+
+    flatDecoder = ae.flatDecoder
+
     if gold is not None:
         if acoustic:
             _, goldseg = readSegFile(gold)
@@ -150,7 +155,7 @@ def testPhonAEOnFixedSeg(ae, Xs, Xs_mask, pSegs, maxChar, maxLen, doc_indices, u
                                                                  batch_size=batch_size,
                                                                  nResample=nResample)
 
-        Yae = getYae(Xae, reverseUtt)
+        Yae = getYae(Xs if ae.flatDecoder else Xae, reverseUtt)
 
         if nResample:
             Xae_full, _, _ = XsSeg2XaePhon(Xs[utt_ids],

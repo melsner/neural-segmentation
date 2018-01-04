@@ -33,7 +33,7 @@ def getRandomPermutation(n):
 ##################################################################################
 
 def scoreXUtt(ae, Xs, Xs_mask, segs, maxUtt, maxLen, logdir,
-              reverseUtt=False, batch_size=128, nResample=None, agg='mean', train=False):
+              reverseUtt=False, batch_size=128, nResample=None, agg='mean', train=False, flatDecoder=False):
     if train:
         ae.save(logdir, suffix='_tmp')
         Xae, deletedChars, oneLetter, eval = ae.update(Xs, Xs_mask, segs, maxUtt, maxLen, verbose=False)
@@ -45,19 +45,25 @@ def scoreXUtt(ae, Xs, Xs_mask, segs, maxUtt, maxLen, logdir,
                                                  maxLen,
                                                  nResample)
 
-    Yae = getYae(Xae, reverseUtt)
+    if flatDecoder:
+        Yae = getYae(Xs, reverseUtt)
+    else:
+        Yae = getYae(Xae, reverseUtt)
 
     if train:
         ae.load(logdir, suffix='_tmp')
 
-    score = -ae.loss_tensor([Xae, Yae], batch_size=batch_size)
+    if flatDecoder:
+        score = -ae.loss_tensor([Xae, Xs, Yae], batch_size=batch_size)
+    else:
+        score = -ae.loss_tensor([Xae, Yae], batch_size=batch_size)
     score = score * Yae.any(-1)
     if agg == 'mean':
         score[score == 0] = nan
         with np.errstate(divide='ignore'):
-            score = np.nan_to_num(np.nanmean(score, axis=-1))
+            score = np.nan_to_num(np.nanmean(score, axis=-1, keepdims=flatDecoder))
     elif agg== 'sum':
-        score = score.sum(-1)
+        score = score.sum(-1, keepdims=flatDecoder)
     else:
         raise ValueError('''The aggregation function you have requested ("%s") is not supported.
                             Supported aggregators are "mean" and "sum".''' % agg)
@@ -113,7 +119,7 @@ def oneBest(scores, annealer, segs):
     return oneBestSegs
 
 def lossXChar(model, Xae, Yae, batch_size, acoustic=False, loss='xent'):
-    preds = model.predict(Xae, batch_size=batch_size)
+    preds = model.predict(Xae, target=Yae, batch_size=batch_size)
 
     if acoustic:
         # MSE loss
