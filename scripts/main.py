@@ -16,7 +16,6 @@ import tensorflow as tf
 from tensorflow.python.platform.test import is_gpu_available
 import numpy as np
 import numpy.ma as ma
-import cPickle as pickle
 import random
 import sys
 import re
@@ -24,7 +23,6 @@ import math
 import copy
 import time
 import signal
-from itertools import izip
 from collections import defaultdict
 from echo_words import CharacterTable, pad
 from capacityStatistics import getPseudowords
@@ -71,8 +69,6 @@ class Annealer(object):
 sig = SigHandler()
 signal.signal(signal.SIGINT, sig.interrupt)
 
-argmax = lambda array: max(izip(array, xrange(len(array))))[1]
-argmin = lambda array: min(izip(array, xrange(len(array))))[1]
 
 
 if __name__ == "__main__":
@@ -397,7 +393,7 @@ if __name__ == "__main__":
     ##################################################################################
     ##################################################################################
 
-    with open(logdir + '/params.txt', 'wb') as f:
+    with open(logdir + '/params.txt', 'w') as f:
         print('Model parameters:', file=f)
         if ACOUSTIC:
             print('  Input type: Acoustic', file=f)

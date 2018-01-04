@@ -502,7 +502,7 @@ class AE(object):
             hm_pred = ax_pred.pcolor(preds, cmap=plt.cm.Blues)
 
             ## Save plot
-            fig.savefig(logdir + '/heatmap_' + prefix + '_utt' + str(u) + '_iter' + str(iteration) + '.jpg')
+            fig.savefig(logdir + '/heatmap_' + prefix + '_utt' + str(u) + '_iter' + str(iteration) + '.png')
 
         plt.close(fig)
 
@@ -577,7 +577,7 @@ class AE(object):
             hm_pred = ax_pred.pcolor(preds, cmap=plt.cm.Blues)
 
             ## Save plot
-            fig.savefig(logdir + '/heatmap_' + prefix + '_wrd' + str(w) + '_iter' + str(iteration) + '.jpg')
+            fig.savefig(logdir + '/heatmap_' + prefix + '_wrd' + str(w) + '_iter' + str(iteration) + '.png')
 
         plt.close(fig)
 
@@ -761,7 +761,7 @@ class Segmenter(object):
             hm_pred = ax_pred.bar(np.arange(len(preds)), preds)
 
             ## Save plot
-            fig.savefig(logdir + '/barchart_' + prefix + '_utt' + str(u) + '_iter' + str(iteration) + '.jpg')
+            fig.savefig(logdir + '/barchart_' + prefix + '_utt' + str(u) + '_iter' + str(iteration) + '.png')
 
         plt.close(fig)
 

@@ -22,7 +22,7 @@ def readSegFile(timeseg_file):
     speech = {}
     offsets = {}
     seg = 0
-    with open(timeseg_file, 'rb') as f:
+    with open(timeseg_file, 'r') as f:
         lines = f.readlines()
         lines.sort(key = lambda x: float(x.strip().split()[1]))
     for line in lines:
@@ -266,7 +266,7 @@ def processInputDir(dataDir, checkpoint, maxChar, ctable=None, acoustic=False, d
 def readText(path, cutoff=inf):
     i = 0
     lines = []
-    with open(path, 'rb') as f:
+    with open(path, 'r') as f:
         line = f.readline()
         while line and i < cutoff:
             lines.append(line)
@@ -312,14 +312,14 @@ def readTexts(path, cutoff=inf):
     chars = {}
     charsets = {}
 
-    for i in xrange(len(filelist)):
+    for i in range(len(filelist)):
         text[idlist[i]], chars[idlist[i]], charsets[idlist[i]] = readText(filelist[i], cutoff)
     charset = list(set.union(*[charsets[d] for d in charsets]))
     return text, chars, charset
 
 def readGoldFrameSeg(path):
     gold_seg = {}
-    with open(path, 'rb') as gold: 
+    with open(path, 'r') as gold: 
         for line in gold: 
             if line.strip() != '': 
                 doc, start, end = line.strip().split()[:3] 
@@ -341,7 +341,7 @@ def readMFCCs(path, filter_file=None):
 
     if filter_file:
         to_keep = {}
-        with open(filter_file, 'rb') as s:
+        with open(filter_file, 'r') as s:
             for line in s:
                 if line.strip() != None:
                     name, start, end = line.strip().split()
@@ -359,7 +359,7 @@ def readMFCCs(path, filter_file=None):
         mfcc_counter = 0
         file_id = basename.match(p).group(1)
         mfcc_lists[file_id] = []
-        with open(p, 'rb') as f:
+        with open(p, 'r') as f:
             for line in f:
                 if line.strip() != '[':
                     if line.strip().startswith('['):
